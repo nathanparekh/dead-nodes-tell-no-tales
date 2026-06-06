@@ -1,5 +1,10 @@
 #!/bin/bash
 
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 <container_name> <node_name>"
+    exit 1
+fi
+
 sudo podman build -t udp-counter -f Containerfile .
 
 CONTAINER_NAME=$1
