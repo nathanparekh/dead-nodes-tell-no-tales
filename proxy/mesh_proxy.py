@@ -12,6 +12,7 @@ PROXY_MARK = 99
 IP_RECVORIGDSTADDR = 20
 IP_TRANSPARENT = 19
 SO_MARK = 36
+SO_REUSEPORT = 15
 
 
 class PeerState:
@@ -41,6 +42,7 @@ class MeshProxy:
         if key not in self.spoof_sockets:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.SOL_SOCKET, SO_REUSEPORT, 1)
             sock.setsockopt(socket.SOL_IP, IP_TRANSPARENT, 1)
             try:
                 sock.bind(key)
@@ -57,9 +59,10 @@ class MeshProxy:
         self.local_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.local_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.local_sock.setsockopt(socket.SOL_IP, IP_RECVORIGDSTADDR, 1)
+        self.local_sock.setsockopt(socket.SOL_IP, IP_TRANSPARENT, 1)
         self.local_sock.bind(("0.0.0.0", LOCAL_INTERCEPT_PORT))
         self.local_sock.setblocking(False)
-        loop.add_reader(self.local_sock.fileno(), self.__handle_local_intercept)
+        loop.add_reader(self.local_sock.fileno(), self._handle_local_intercept)
 
         tunnel_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         tunnel_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -84,10 +87,14 @@ class MeshProxy:
                 # Incoming Data Packet (9-byte header)
                 if msg_type == 0:
                     seq, orig_src_port, orig_dst_port = struct.unpack("!IHH", data[1:9])
+                    print(
+                        f"[<-] Received tunnel packet from {remote_ip}. Spoofing delivery to {orig_dst_port}..."
+                    )
+
                     payload = data[9:]
 
                     ack_packet = struct.pack("!BI", 1, seq)
-                    self.proxy.tunnel_tranport.sendto(
+                    self.proxy.tunnel_transport.sendto(
                         ack_packet, (remote_ip, TUNNEL_PORT)
                     )
 
@@ -144,6 +151,9 @@ class MeshProxy:
 
                 if target_ip and target_port:
                     peer = self.get_peer(target_ip)
+                    print(
+                        f"[->] Intercepted app packet. Tunneling to {target_ip}:{target_port}..."
+                    )
 
                     # Pack 9-byte Header: Type (1), Seq (4), SrcPort (2), DstPort(2)
                     header = struct.pack(
@@ -155,7 +165,7 @@ class MeshProxy:
                     self.tunnel_transport.sendto(packet, (target_ip, TUNNEL_PORT))
                     peer.send_seq += 1
 
-        except BlockingIoError:
+        except BlockingIOError:
             pass
 
     async def _retransmit_loop(self):
