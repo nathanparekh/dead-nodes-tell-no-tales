@@ -213,8 +213,8 @@ static int transfer(int argc, char **argv) {
     char msg[BUF];
     char reply[BUF];
 
-    if (argc != 8) {
-        fprintf(stderr, "usage: %s transfer FROM_HOST FROM_PORT TO_HOST TO_PORT AMOUNT TXID\n",
+    if (argc != 7) {
+        fprintf(stderr, "usage: %s transfer FROM_HOST FROM_PORT TO_HOST TO_PORT AMOUNT\n",
                 argv[0]);
         return 1;
     }
