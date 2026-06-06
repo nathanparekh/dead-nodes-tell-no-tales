@@ -13,12 +13,12 @@ B_CHECKPOINT=/tmp/counter-b-checkpoint.tar.zst
 B_RESTORE_NAME=counter-b
 
 echo "Reset all counters to 10."
-./counter reset "$A_HOST" "$PORT" 10
-./counter reset "$B_HOST" "$PORT" 10
-./counter reset "$C_HOST" "$PORT" 10
+../src/counter reset "$A_HOST" "$PORT" 10
+../src/counter reset "$B_HOST" "$PORT" 10
+../src/counter reset "$C_HOST" "$PORT" 10
 
 echo "Initial state:"
-./counter sum "$A_HOST" "$PORT" "$B_HOST" "$PORT" "$C_HOST" "$PORT" \
+../src/counter sum "$A_HOST" "$PORT" "$B_HOST" "$PORT" "$C_HOST" "$PORT" \
   "$EXPECTED" "$TIMEOUT_MS" "$STABLE_POLLS" 
 
 echo "Checkpointing local B."
@@ -27,12 +27,13 @@ sudo podman container checkpoint "$B_CONTAINER" --export "$B_CHECKPOINT"
 sudo podman rm "$B_CONTAINER" >/dev/null
 
 echo "Sending A -> B while local B is absent. A debits; the UDP credit should disappear."
-./counter transfer "$A_HOST" "$PORT" "$B_HOST" "$PORT" 7
+../src/counter transfer "$A_HOST" "$PORT" "$B_HOST" "$PORT" 7
 
 echo "Restoring local B from the checkpoint tar."
 sudo podman container restore --import "$B_CHECKPOINT" --name "$B_RESTORE_NAME"
 
 sleep 1
 
-./counter sum "$A_HOST" "$PORT" "$B_HOST" "$PORT" "$C_HOST" "$PORT" \
+../src/counter sum "$A_HOST" "$PORT" "$B_HOST" "$PORT" "$C_HOST" "$PORT" \
   "$EXPECTED" "$TIMEOUT_MS" "$STABLE_POLLS"
+
