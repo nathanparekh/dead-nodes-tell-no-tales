@@ -1,0 +1,10 @@
+FROM python:3.11-alpine
+RUN apk add --no-cache iptables iproute2
+WORKDIR /app
+
+COPY mesh_proxy.py .
+COPY entrypoint.sh .
+
+RUN chmod +x entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
