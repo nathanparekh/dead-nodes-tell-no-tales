@@ -2,6 +2,7 @@ class SnapshotController:
     def __init__(self, proxy_instance):
         self.proxy = proxy_instance
 
+        self.is_snapshotting = False
         self.recording_channels = set()
         self.channel_states = {}
 
@@ -14,22 +15,37 @@ class SnapshotController:
         """
 
         if payload.startswith(b"__MARKER__"):
-            print(
-                f"[*] Marker received from {remote_ip}. Initiating channel state recording."
-            )
-            self.recording_channels.add(remote_ip)
-            if remote_ip not in self.channel_states:
-                self.channel_states[remote_ip] = []
+            if not self.is_snapshotting:
+                print(
+                    f"[*] Marker received from {remote_ip}. Initiating channel state recording."
+                )
+                self.is_snapshotting = True
+                self._trigger_app_snapshot_out_of_band()
+
+                self.channel_states.clear()
+                self.recording_channels = set(self.proxy.peers.keys())
+                self.recording_channels.discard(remote_ip)
+
+                for ip in self.recording_channels:
+                    self.channel_states[ip] = []
+
+                if not self.recording_channels:
+                    self._finish_global_snapshot()
+
+            else:
+                if remote_ip in self.recording_channels:
+                    print(
+                        f"[*] Marker received from {remote_ip}. Finalizing this channel's state."
+                    )
+                    self.recording_channels.discard(remote_ip)
+
+                    if not self.recording_channels:
+                        self._finish_global_snapshot()
 
             return True
 
-        if remote_ip in self.recording_channels:
-            if payload.startswith(b"__END_SNAPSHOT__"):
-                self._finish_snapshot(remote_ip)
-                return True
-            print(
-                f"[*] Recording in-transit message seq {seq} from channel {remote_ip}"
-            )
+        if self.is_snapshotting and remote_ip in self.recording_channels:
+            print(f"[*] Caching in-flight message seq {seq} from {remote_ip}")
             self.channel_states[remote_ip].append(
                 {
                     "seq": seq,
@@ -38,10 +54,16 @@ class SnapshotController:
                     "dst_port": dst_port,
                 }
             )
-
             return True
 
         return False
+
+    def _trigger_app_snapshot_out_of_band(self):
+        """
+        Use CRIU to snapshot the application.
+        """
+        print("[!] Out-of-Band Signal: Telling local app to snapshot memory NOW!")
+        # TODO
 
     def _finish_snapshot(self, remote_ip):
         print(f"[*] Snapshot complete for {remote_ip}. Resuming normal delivery...")
