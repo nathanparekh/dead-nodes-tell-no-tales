@@ -1,3 +1,9 @@
+import struct
+import time
+
+from config import TUNNEL_PORT
+
+
 class SnapshotController:
     def __init__(self, proxy_instance):
         self.proxy = proxy_instance
@@ -25,6 +31,17 @@ class SnapshotController:
                 self.channel_states.clear()
                 self.recording_channels = set(self.proxy.peers.keys())
                 self.recording_channels.discard(remote_ip)
+
+                for peer_ip, peer_state in self.proxy.peers.items():
+                    if peer_ip != remote_ip:
+                        print(f"[*] Broadcasting MARKER to {peer_ip}")
+                        header = struct.pack("!BIHH", 0, peer_state.send_seq, 0, 0)
+                        packet = header + b"__MARKER__"
+                        self.proxy.tunnel_transport.sendto(
+                            packet, (peer_ip, TUNNEL_PORT)
+                        )
+                        peer_state.unacked[peer_state.send_seq] = (time.time(), packet)
+                        peer_state.send_seq += 1
 
                 for ip in self.recording_channels:
                     self.channel_states[ip] = []

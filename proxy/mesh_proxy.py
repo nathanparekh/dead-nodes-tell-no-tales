@@ -4,23 +4,8 @@ import struct
 import time
 from collections import OrderedDict
 
+from config import *
 from snapshot_handler import SnapshotController
-
-LOCAL_INTERCEPT_PORT = 9000
-TUNNEL_PORT = 9001
-RETRY_TIMEOUT = 0.5
-PROXY_MARK = 99
-
-# --- Eviction Thresholds ---
-MAX_SPOOF_SOCKETS = 512
-# PEER_TIMEOUT = 300.0
-# RECV_BUFFER_TIMEOUT = 300.0
-
-# --- Linux Kernel Hacks ---
-IP_RECVORIGDSTADDR = 20
-IP_TRANSPARENT = 19
-SO_MARK = 36
-SO_REUSEPORT = 15
 
 
 class PeerState:
@@ -112,24 +97,26 @@ class MeshProxy:
                         ack_packet, (remote_ip, TUNNEL_PORT)
                     )
 
-                    if self.proxy.snapshot_ctrl.process_message(
-                        remote_ip, seq, payload, orig_src_port, orig_dst_port
-                    ):
-                        return
+                    def process_and_deliver(current_seq, p, ip, src_port, dst_port):
+                        consumed = self.proxy.snapshot_ctrl.process_message(
+                            ip, current_seq, p, src_port, dst_port
+                        )
 
-                    def deliver(s, p, ip, src_port, dst_port):
-                        spoof_sock = self.proxy.get_spoof_sock(ip, src_port)
-                        spoof_sock.sendto(p, ("127.0.0.1", dst_port))
+                        if not consumed:
+                            spoof_sock = self.proxy.get_spoof_sock(ip, src_port)
+                            spoof_sock.sendto(p, ("127.0.0.1", dst_port))
 
                     if seq == peer.recv_seq:
-                        deliver(seq, payload, remote_ip, orig_src_port, orig_dst_port)
+                        process_and_deliver(
+                            seq, payload, remote_ip, orig_src_port, orig_dst_port
+                        )
                         peer.recv_seq += 1
 
                         while peer.recv_seq in peer.recv_buffer:
                             next_payload, next_src_port, next_dst_port = (
                                 peer.recv_buffer.pop(peer.recv_seq)
                             )
-                            deliver(
+                            process_and_deliver(
                                 peer.recv_seq,
                                 next_payload,
                                 remote_ip,
@@ -157,6 +144,13 @@ class MeshProxy:
         try:
             while True:
                 data, ancdata, flags, addr = self.local_sock.recvmsg(65536, 1024)
+
+                if data.startswith(b"__START_SNAPSHOT__"):
+                    self.snapshot_ctrl.process_message(
+                        "127.0.0.1", 0, b"__MARKER__", 0, 0
+                    )
+                    continue
+
                 orig_src_port = addr[1]
 
                 target_ip = None
