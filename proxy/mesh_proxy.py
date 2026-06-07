@@ -8,6 +8,11 @@ TUNNEL_PORT = 9001
 RETRY_TIMEOUT = 0.5
 PROXY_MARK = 99
 
+# --- Eviction Thresholds ---
+MAX_SPOOF_SOCKETS = 512
+# PEER_TIMEOUT = 300.0
+# RECV_BUFFER_TIMEOUT = 300.0
+
 # --- Linux Kernel Hacks ---
 IP_RECVORIGDSTADDR = 20
 IP_TRANSPARENT = 19
@@ -28,7 +33,7 @@ class PeerState:
 class MeshProxy:
     def __init__(self):
         self.peers = {}
-        self.spoof_sockets = {}  # (src_ip, src_port) -> socket
+        self.spoof_sockets = OrderedDict() # (src_ip, src_port) -> socket
         self.tunnel_transport = None
         self.local_sock = None
 
@@ -39,18 +44,25 @@ class MeshProxy:
 
     def get_spoof_sock(self, src_ip, src_port):
         key = (src_ip, src_port)
-        if key not in self.spoof_sockets:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.setsockopt(socket.SOL_SOCKET, SO_REUSEPORT, 1)
-            sock.setsockopt(socket.SOL_IP, IP_TRANSPARENT, 1)
-            try:
-                sock.bind(key)
-            except OSError as e:
-                print(
-                    f"[!] Failed to bind transparent socket to {src_ip}:{src_port} - {e}"
-                )
-            self.spoof_sockets[key] = sock
+        if key in self.spoof_sockets:
+            self.spoof_sockets.move_to_end(key)
+            return self.spoof_sockets[key]
+
+        if len(self.spoof_sockets) >= MAX_SPOOF_SOCKETS:
+            _, old_sock = self.spoof_sockets.popitem(last=False)
+            old_sock.close()
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, SO_REUSEPORT, 1)
+        sock.setsockopt(socket.SOL_IP, IP_TRANSPARENT, 1)
+        try:
+            sock.bind(key)
+        except OSError as e:
+            print(
+                f"[!] Failed to bind transparent socket to {src_ip}:{src_port} - {e}"
+            )
+        self.spoof_sockets[key] = sock
         return self.spoof_sockets[key]
 
     async def start(self):
