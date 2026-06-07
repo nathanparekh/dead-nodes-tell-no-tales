@@ -2,6 +2,7 @@ import asyncio
 import socket
 import struct
 import time
+import uuid
 from collections import OrderedDict
 
 from config import *
@@ -52,6 +53,15 @@ class MeshProxy:
         self.spoof_sockets[key] = sock
         return self.spoof_sockets[key]
 
+    def process_and_deliver(self, current_seq, p, ip, src_port, dst_port):
+        consumed = self.snapshot_ctrl.process_message(
+            ip, current_seq, p, src_port, dst_port
+        )
+
+        if not consumed:
+            spoof_sock = self.get_spoof_sock(ip, src_port)
+            spoof_sock.sendto(p, ("127.0.0.1", dst_port))
+
     async def start(self):
         loop = asyncio.get_running_loop()
 
@@ -97,17 +107,8 @@ class MeshProxy:
                         ack_packet, (remote_ip, TUNNEL_PORT)
                     )
 
-                    def process_and_deliver(current_seq, p, ip, src_port, dst_port):
-                        consumed = self.proxy.snapshot_ctrl.process_message(
-                            ip, current_seq, p, src_port, dst_port
-                        )
-
-                        if not consumed:
-                            spoof_sock = self.proxy.get_spoof_sock(ip, src_port)
-                            spoof_sock.sendto(p, ("127.0.0.1", dst_port))
-
                     if seq == peer.recv_seq:
-                        process_and_deliver(
+                        self.process_and_deliver(
                             seq, payload, remote_ip, orig_src_port, orig_dst_port
                         )
                         peer.recv_seq += 1
@@ -116,7 +117,7 @@ class MeshProxy:
                             next_payload, next_src_port, next_dst_port = (
                                 peer.recv_buffer.pop(peer.recv_seq)
                             )
-                            process_and_deliver(
+                            self.process_and_deliver(
                                 peer.recv_seq,
                                 next_payload,
                                 remote_ip,
@@ -146,8 +147,10 @@ class MeshProxy:
                 data, ancdata, flags, addr = self.local_sock.recvmsg(65536, 1024)
 
                 if data.startswith(b"__START_SNAPSHOT__"):
+                    snapshot_id = str(uuid.uuid4()).encode()
+                    marker_payload = b"__MARKER__:" + snapshot_id
                     self.snapshot_ctrl.process_message(
-                        "127.0.0.1", 0, b"__MARKER__", 0, 0
+                        "127.0.0.1", 0, marker_payload, 0, 0
                     )
                     continue
 

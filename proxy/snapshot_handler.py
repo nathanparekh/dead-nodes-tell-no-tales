@@ -9,6 +9,7 @@ class SnapshotController:
         self.proxy = proxy_instance
 
         self.is_snapshotting = False
+        self.current_snapshot_id = None
         self.recording_channels = set()
         self.channel_states = {}
 
@@ -20,13 +21,16 @@ class SnapshotController:
             False: If the message should be delivered normally by the main proxy.
         """
 
-        if payload.startswith(b"__MARKER__"):
+        if payload.startswith(b"__MARKER__:"):
+            marker_id = payload.split(b":", 1)[1]
+
             if not self.is_snapshotting:
                 print(
                     f"[*] Marker received from {remote_ip}. Initiating channel state recording."
                 )
                 self.is_snapshotting = True
-                self._trigger_app_snapshot_out_of_band()
+                self.current_snapshot_id = marker_id
+                self._trigger_app_snapshot_out_of_band(marker_id.decode())
 
                 self.channel_states.clear()
                 self.recording_channels = set(self.proxy.peers.keys())
@@ -36,7 +40,7 @@ class SnapshotController:
                     if peer_ip != remote_ip:
                         print(f"[*] Broadcasting MARKER to {peer_ip}")
                         header = struct.pack("!BIHH", 0, peer_state.send_seq, 0, 0)
-                        packet = header + b"__MARKER__"
+                        packet = header + payload
                         self.proxy.tunnel_transport.sendto(
                             packet, (peer_ip, TUNNEL_PORT)
                         )
@@ -50,6 +54,13 @@ class SnapshotController:
                     self._finish_global_snapshot()
 
             else:
+
+                if marker_id != self.current_snapshot_id:
+                    print(
+                        f"[!] Ghost/Stale marker received (ID: {marker_id.decode()}). Ignored."
+                    )
+                    return True
+
                 if remote_ip in self.recording_channels:
                     print(
                         f"[*] Marker received from {remote_ip}. Finalizing this channel's state."
@@ -75,7 +86,7 @@ class SnapshotController:
 
         return False
 
-    def _trigger_app_snapshot_out_of_band(self):
+    def _trigger_app_snapshot_out_of_band(self, snapshot_id):
         """
         Use CRIU to snapshot the application.
         """
@@ -85,6 +96,7 @@ class SnapshotController:
     def _finish_global_snapshot(self):
         print("[*] Global Snapshot Complete! Flushing all cached channels...")
         self.is_snapshotting = False
+        self.current_snapshot_id = None
 
         for remote_ip, recorded_state in self.channel_states.items():
             if not recorded_state:
@@ -101,16 +113,22 @@ class SnapshotController:
                 dst_port = msg["dst_port"]
 
                 if seq == peer.recv_seq:
-                    spoof_sock = self.proxy.get_spoof_sock(remote_ip, src_port)
-                    spoof_sock.sendto(payload, ("127.0.0.1", dst_port))
+                    self.proxy.process_and_deliver(
+                        seq, payload, remote_ip, src_port, dst_port
+                    )
                     peer.recv_seq += 1
 
                     while peer.recv_seq in peer.recv_buffer:
                         next_payload, next_src_port, next_dst_port = (
                             peer.recv_buffer.pop(peer.recv_seq)
                         )
-                        next_sock = self.proxy.get_spoof_sock(remote_ip, next_src_port)
-                        next_sock.sendto(next_payload, ("127.0.0.1", next_dst_port))
+                        self.proxy.process_and_deliver(
+                            peer.recv_seq,
+                            next_payload,
+                            remote_ip,
+                            next_src_port,
+                            next_dst_port,
+                        )
                         peer.recv_seq += 1
                 elif seq > peer.recv_seq:
                     peer.recv_buffer[seq] = (payload, src_port, dst_port)
