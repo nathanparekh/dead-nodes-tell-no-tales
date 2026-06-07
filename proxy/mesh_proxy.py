@@ -4,6 +4,8 @@ import struct
 import time
 from collections import OrderedDict
 
+from snapshot_handler import SnapshotController
+
 LOCAL_INTERCEPT_PORT = 9000
 TUNNEL_PORT = 9001
 RETRY_TIMEOUT = 0.5
@@ -37,6 +39,7 @@ class MeshProxy:
         self.spoof_sockets = OrderedDict()  # (src_ip, src_port) -> socket
         self.tunnel_transport = None
         self.local_sock = None
+        self.snapshot_ctrl = SnapshotController(self)
 
     def get_peer(self, ip):
         if ip not in self.peers:
@@ -108,6 +111,11 @@ class MeshProxy:
                     self.proxy.tunnel_transport.sendto(
                         ack_packet, (remote_ip, TUNNEL_PORT)
                     )
+
+                    if self.proxy.snapshot_ctrl.process_message(
+                        remote_ip, seq, payload, orig_src_port, orig_dst_port
+                    ):
+                        return
 
                     def deliver(s, p, ip, src_port, dst_port):
                         spoof_sock = self.proxy.get_spoof_sock(ip, src_port)
