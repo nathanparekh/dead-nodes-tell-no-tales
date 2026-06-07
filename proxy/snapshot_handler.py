@@ -65,32 +65,36 @@ class SnapshotController:
         print("[!] Out-of-Band Signal: Telling local app to snapshot memory NOW!")
         # TODO
 
-    def _finish_snapshot(self, remote_ip):
-        print(f"[*] Snapshot complete for {remote_ip}. Resuming normal delivery...")
-        self.recording_channels.discard(remote_ip)
+    def _finish_global_snapshot(self):
+        print("[*] Global Snapshot Complete! Flushing all cached channels...")
+        self.is_snapshotting = False
 
-        recorded_state = self.channel_states.pop(remote_ip, [])
-        peer = self.proxy.get_peer(remote_ip)
+        for remote_ip, recorded_state in self.channel_states.items():
+            if not recorded_state:
+                continue
 
-        recorded_state.sort(key=lambda x: x["seq"])
-        for msg in recorded_state:
-            seq = msg["seq"]
-            payload = msg["payload"]
-            src_port = msg["src_port"]
-            dst_port = msg["dst_port"]
+            peer = self.proxy.get_peer(remote_ip)
 
-            if seq == peer.recv_seq:
-                spoof_sock = self.proxy.get_spoof_sock(remote_ip, src_port)
-                spoof_sock.sendto(payload, ("127.0.0.1", dst_port))
-                peer.recv_seq += 1
+            recorded_state.sort(key=lambda x: x["seq"])
 
-                while peer.recv_seq in peer.recv_buffer:
-                    next_payload, next_src_port, next_dst_port = peer.recv_buffer.pop(
-                        peer.recv_seq
-                    )
-                    next_sock = self.proxy.get_spoof_sock(remote_ip, next_src_port)
-                    next_sock.sendto(next_payload, ("127.0.0.1", next_dst_port))
+            for msg in recorded_state:
+                seq = msg["seq"]
+                payload = msg["payload"]
+                src_port = msg["src_port"]
+                dst_port = msg["dst_port"]
+
+                if seq == peer.recv_seq:
+                    spoof_sock = self.proxy.get_spoof_sock(remote_ip, src_port)
+                    spoof_sock.sendto(payload, ("127.0.0.1", dst_port))
                     peer.recv_seq += 1
 
-            elif seq > peer.recv_seq:
-                peer.recv_buffer[seq] = (payload, src_port, dst_port)
+                    while peer.recv_seq in peer.recv_buffer:
+                        next_payload, next_src_port, next_dst_port = (
+                            peer.recv_buffer.pop(peer.recv_seq)
+                        )
+                        next_sock = self.proxy.get_spoof_sock(remote_ip, next_src_port)
+                        next_sock.sendto(next_payload, ("127.0.0.1", next_dst_port))
+                        peer.recv_seq += 1
+                elif seq > peer.recv_seq:
+                    peer.recv_buffer[seq] = (payload, src_port, dst_port)
+        self.channel_states.clear()
