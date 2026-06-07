@@ -2,6 +2,7 @@ import asyncio
 import socket
 import struct
 import time
+from collections import OrderedDict
 
 LOCAL_INTERCEPT_PORT = 9000
 TUNNEL_PORT = 9001
@@ -33,7 +34,7 @@ class PeerState:
 class MeshProxy:
     def __init__(self):
         self.peers = {}
-        self.spoof_sockets = OrderedDict() # (src_ip, src_port) -> socket
+        self.spoof_sockets = OrderedDict()  # (src_ip, src_port) -> socket
         self.tunnel_transport = None
         self.local_sock = None
 
@@ -59,9 +60,7 @@ class MeshProxy:
         try:
             sock.bind(key)
         except OSError as e:
-            print(
-                f"[!] Failed to bind transparent socket to {src_ip}:{src_port} - {e}"
-            )
+            print(f"[!] Failed to bind transparent socket to {src_ip}:{src_port} - {e}")
         self.spoof_sockets[key] = sock
         return self.spoof_sockets[key]
 
