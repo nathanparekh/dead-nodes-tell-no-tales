@@ -1,12 +1,12 @@
-import socket
 import argparse
+import socket
 import time
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--send', action='store_true', help='Send a UDP packets')
-parser.add_argument('--recv', action='store_true', help='Receive UDP packets')
-parser.add_argument('--ip', type=str, default='127.0.0.1', help='IP address to send to')
-parser.add_argument('--port', type=int, default=5005, help='Port to use')
+parser.add_argument("--send", action="store_true", help="Send a UDP packets")
+parser.add_argument("--recv", action="store_true", help="Receive UDP packets")
+parser.add_argument("--ip", type=str, default="127.0.0.1", help="IP address to send to")
+parser.add_argument("--port", type=int, default=5005, help="Port to use")
 args = parser.parse_args()
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -17,9 +17,9 @@ if args.send:
     try:
         while True:
             message = f"Message sequence number: {counter}"
-            sock.sendto(message.encode('utf-8'), (args.ip, args.port))
+            sock.sendto(message.encode("utf-8"), (args.ip, args.port))
             print(f"Sent: {message}")
-            counter+=1
+            counter += 1
             time.sleep(0.5)
     except KeyboardInterrupt:
         print("\nStopping...")
