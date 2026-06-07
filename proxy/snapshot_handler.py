@@ -1,5 +1,9 @@
 import struct
 import time
+import os
+import urllib.request
+import json
+import socket
 
 from config import TUNNEL_PORT
 
@@ -90,8 +94,25 @@ class SnapshotController:
         """
         Use CRIU to snapshot the application.
         """
+        container_id = socket.gethostname()
+
         print("[!] Out-of-Band Signal: Telling local app to snapshot memory NOW!")
-        # TODO
+        agent_url = "http://host.containers.internal:9090/checkpoint"
+        payload = json.dumps(
+            {"container_id": container_id, "snapshot_id": snapshot_id}
+        ).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                agent_url, data=payload, headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status == 200:
+                    print("[*] Host Agent confirmed checkpoint completion.")
+        except Exception as e:
+            print(
+                f"[!] FATAL: Failed to reac Checkpoint Interface or checkpoint failed! {e}"
+            )
 
     def _finish_global_snapshot(self):
         print("[*] Global Snapshot Complete! Flushing all cached channels...")
