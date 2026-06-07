@@ -50,7 +50,7 @@ static void resolve_udp(const char *host, const char *port, struct sockaddr_stor
     struct addrinfo *res;
 
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
 
     if (getaddrinfo(host, port, &hints, &res) != 0)
@@ -364,3 +364,4 @@ int main(int argc, char **argv)
     fprintf(stderr, "unknown command: %s\n", argv[1]);
     return 1;
 }
+
