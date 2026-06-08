@@ -23,9 +23,9 @@ static int bind_udp(const char *port)
     int sock;
     int yes = 1;
     int no = 0;
-    struct sockaddr_in6 addr;
+    struct sockaddr_in addr;
 
-    sock = socket(AF_INET6, SOCK_DGRAM, 0);
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0)
         die("socket");
 
@@ -33,9 +33,9 @@ static int bind_udp(const char *port)
     setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
 
     memset(&addr, 0, sizeof(addr));
-    addr.sin6_family = AF_INET6;
-    addr.sin6_addr = in6addr_any;
-    addr.sin6_port = htons((unsigned short)to_int(port));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((unsigned short)to_int(port));
 
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0)
         die("bind");
@@ -246,7 +246,7 @@ static int transfer(int argc, char **argv)
         return 1;
     }
 
-    snprintf(msg, sizeof(msg), "TRANSFER %s %s %s %d", argv[7], argv[4], argv[5], to_int(argv[6]));
+    snprintf(msg, sizeof(msg), "TRANSFER %s %s %d", argv[4], argv[5], to_int(argv[6]));
 
     if (request_udp(argv[2], argv[3], msg, reply, 1000) != 0)
         return 1;
