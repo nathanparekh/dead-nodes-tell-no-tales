@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import socket
 import struct
 import time
@@ -26,6 +27,9 @@ class MeshProxy:
         self.tunnel_transport = None
         self.local_sock = None
         self.snapshot_ctrl = SnapshotController(self)
+        self.routing_table = {}
+        self.probe_buffer = {}
+        self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)
 
     def get_peer(self, ip):
         if ip not in self.peers:
@@ -62,6 +66,20 @@ class MeshProxy:
             spoof_sock = self.get_spoof_sock(ip, src_port)
             spoof_sock.sendto(p, ("127.0.0.1", dst_port))
 
+    async def _probe_target(self, target_ip):
+        """Probe an IP to see if it has a proxy sidecar."""
+        printf(f"[*] Probing {target_ip} for proxy sidecar...")
+        if self.tunnel_transport:
+            self.tunnel_transport.sendto(b"__PROBE__", (target_ip, TUNNEL_PORT))
+
+        await asyncio.sleep(0.5)
+
+        if self.routing_table.get(target_ip) == "PROBING":
+            self.routing_table[target_ip] = "EXTERNAL"
+            for data, src_port, dst_port in self.probe_buffer.pop(target_ip, []):
+                spoof_sock = self.get_spoof_sock(target_ip, src_port)
+                spoof_sock.sendto(data, (target_ip, dst_port))
+
     async def start(self):
         loop = asyncio.get_running_loop()
 
@@ -91,6 +109,31 @@ class MeshProxy:
             def datagram_received(self, data, addr):
                 remote_ip = addr[0]
                 peer = self.proxy.get_peer(remote_ip)
+
+                if data == b"__PROBE__":
+                    self.proxy.tunnel_transport.sendto(b"__PROBE_ACK__", addr)
+                    return
+
+                if data == b"__PROBE_ACK__":
+                    if self.proxy.routing_table.get(remote_ip) == "PROBING":
+                        self.proxy.routing_table[remote_ip] = "MESH"
+                        for payload, src_port, dst_port in self.proxy.probe_buffer.pop(
+                            remote_ip, []
+                        ):
+                            header = struct.pack(
+                                "!BIFF", 0, peer.send_seq, src_port, dst_port
+                            )
+                            packet = header + payload
+                            self.proxy.tunnel_transport.sendto(
+                                packet, (remote_ip, TUNNEL_PORT)
+                            )
+                            peer.unacked[peer.send_seq] = (time.time(), packet)
+                            peer.send_seq += 1
+                    return
+
+                if len(data) < 9:
+                    return
+
                 msg_type = data[0]
 
                 # Incoming Data Packet (9-byte header)
@@ -166,20 +209,38 @@ class MeshProxy:
                         break
 
                 if target_ip and target_port:
-                    peer = self.get_peer(target_ip)
-                    print(
-                        f"[->] Intercepted app packet. Tunneling to {target_ip}:{target_port}..."
-                    )
+                    state = self.routing_table.get(target_ip)
 
-                    # Pack 9-byte Header: Type (1), Seq (4), SrcPort (2), DstPort(2)
-                    header = struct.pack(
-                        "!BIHH", 0, peer.send_seq, orig_src_port, target_port
-                    )
-                    packet = header + data
+                    if state is None:
+                        if ipaddress.ip_address(target_ip) in self.mesh_network:
+                            self.routing_table[target_ip] = "PROBING"
+                            self.probe_buffer[target_ip] = [
+                                (data, orig_src_port, target_port)
+                            ]
+                            asyncio.create_task(self._probe_target(target_ip))
+                        else:
+                            self.routing_table[target_ip] = "EXTERNAL"
+                            spoof_sock = self.get_spoof_sock(target_ip, orig_src_port)
+                            spoof_sock.sendto(data, (target_ip, target_port))
 
-                    peer.unacked[peer.send_seq] = (time.time(), packet)
-                    self.tunnel_transport.sendto(packet, (target_ip, TUNNEL_PORT))
-                    peer.send_seq += 1
+                    elif state == "PROBING":
+                        self.probe_buffer[target_ip].append(
+                            (data, orig_src_port, target_port)
+                        )
+
+                    elif state == "MESH":
+                        peer.self.get_peer(target_ip)
+                        header = struct.pack(
+                            "!BIHH", 0, peer.send_seq, orig_src_port, target_port
+                        )
+                        packet = header + data
+                        self.tunnel_transport.sendto(packet, (target_ip, TUNNEL_PORT))
+                        peer.unacked[peer.send_seq] = (time.time(), packet)
+                        peer.send_seq += 1
+
+                    elif state == "EXTERNAL":
+                        spoof_sock = self.get_spoof_sock(target_ip, orig_src_port)
+                        spoof_sock.sendto(data, (target_ip, target_port))
 
         except BlockingIOError:
             pass

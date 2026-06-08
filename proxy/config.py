@@ -6,6 +6,9 @@ TUNNEL_PORT = 9001
 RETRY_TIMEOUT = 0.5
 PROXY_MARK = 99
 
+# --- Application Configuration ---
+MESH_SUBNET = "10.24.24.0/24"
+
 # --- Eviction Thresholds ---
 MAX_SPOOF_SOCKETS = 512
 
