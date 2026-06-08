@@ -8,6 +8,8 @@ if [ "$#" -lt 2 ]; then
     exit 1
 fi
 
+sudo podman build --network=host -t udp-counter -f Containerfile .
+
 SUFFIX=$1
 NODE_NAME=${2^^}
 APP_NAME="counter-$SUFFIX"
@@ -20,7 +22,10 @@ IP_SUFFIX=$((ASCII_VAL - 97 + 10))
 IP="10.24.24.$IP_SUFFIX"
 MESH_SUBNET="10.24.24.0/24"
 
-echo "=== Deploying Node $NODE_NAME ==="
+echo "=== Deploying Container $APP_NAME ==="
+
+sudo podman rm -f "$APP_NAME"
+sudo podman rm -f "$SIDECAR_NAME"
 
 # 2. Launch the core application container onto the macvlan network
 echo "[*] Starting App Container: $APP_NAME on IP $IP"
