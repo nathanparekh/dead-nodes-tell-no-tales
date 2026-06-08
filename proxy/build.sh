@@ -1,4 +1,4 @@
 #!/bin/bash
 
-sudo podman build -t udp-counter -f Containerfile.app .
-sudo podman build -t rudp-sidecar -f Containerfile.rudp .
+sudo podman build --network=host -t udp-counter -f Containerfile.app .
+sudo podman build --network=host -t rudp-sidecar -f Containerfile.rudp .
