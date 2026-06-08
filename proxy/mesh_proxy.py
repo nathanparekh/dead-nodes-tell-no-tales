@@ -229,7 +229,7 @@ class MeshProxy:
                         )
 
                     elif state == "MESH":
-                        peer.self.get_peer(target_ip)
+                        peer = self.get_peer(target_ip)
                         header = struct.pack(
                             "!BIHH", 0, peer.send_seq, orig_src_port, target_port
                         )
