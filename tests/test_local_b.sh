@@ -20,10 +20,11 @@ echo "Initial state:"
 
 echo "Checkpointing local B and its sidecar safely..."
 # Crucial: Use --tcp-established to freeze network interface sockets properly
-sudo podman container checkpoint counter-b --tcp-established --export /tmp/counter-b.tar.zst
-sudo podman container checkpoint sidecar-b --tcp-established --export /tmp/sidecar-b.tar.zst
+podman container ps
+podman container checkpoint counter-b --export /tmp/counter-b.tar.zst
+podman container checkpoint sidecar-b --export /tmp/sidecar-b.tar.zst
 
-sudo podman rm -f sidecar-b counter-b >/dev/null
+podman rm -f sidecar-b counter-b >/dev/null
 
 echo "Sending A -> B while local B is absent."
 echo "Sidecar A will intercept this, queue it, and persistently retry behind the scenes."
@@ -31,8 +32,8 @@ echo "Sidecar A will intercept this, queue it, and persistently retry behind the
 
 echo "Restoring local B components onto their macvlan network space."
 # Crucial: Add --tcp-established on restore so they don't lose network bindings
-sudo podman container restore --tcp-established --import /tmp/counter-b.tar.zst --name counter-b
-sudo podman container restore --tcp-established --import /tmp/sidecar-b.tar.zst --name sidecar-b
+podman container restore --tcp-established --import /tmp/counter-b.tar.zst
+podman container restore --tcp-established --import /tmp/sidecar-b.tar.zst
 
 echo "Waiting for proxy to flush queued buffers..."
 sleep 1.5

@@ -24,7 +24,7 @@ MESH_SUBNET="10.24.24.0/24"
 
 echo "=== Deploying Container $APP_NAME ==="
 
-sudo podman rm -f "$SIDECAR_NAME" && sudo podman rm -f "$APP_NAME"
+sudo podman kill "$SIDECAR_NAME" && sudo podman kill "$APP_NAME"
 
 # sudo podman rm -f "$APP_NAME" "$SIDECAR_NAME"
 # sudo podman rm -f "$APP_NAME" "$SIDECAR_NAME"
