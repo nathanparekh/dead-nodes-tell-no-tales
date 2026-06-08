@@ -24,8 +24,10 @@ MESH_SUBNET="10.24.24.0/24"
 
 echo "=== Deploying Container $APP_NAME ==="
 
-sudo podman rm -f "$APP_NAME"
-sudo podman rm -f "$SIDECAR_NAME"
+sudo podman rm -f "$SIDECAR_NAME" && sudo podman rm -f "$APP_NAME"
+
+# sudo podman rm -f "$APP_NAME" "$SIDECAR_NAME"
+# sudo podman rm -f "$APP_NAME" "$SIDECAR_NAME"
 
 # 2. Launch the core application container onto the macvlan network
 echo "[*] Starting App Container: $APP_NAME on IP $IP"
