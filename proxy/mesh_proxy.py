@@ -68,7 +68,7 @@ class MeshProxy:
 
     async def _probe_target(self, target_ip):
         """Probe an IP to see if it has a proxy sidecar."""
-        printf(f"[*] Probing {target_ip} for proxy sidecar...")
+        print(f"[*] Probing {target_ip} for proxy sidecar...")
         if self.tunnel_transport:
             self.tunnel_transport.sendto(b"__PROBE__", (target_ip, TUNNEL_PORT))
 
