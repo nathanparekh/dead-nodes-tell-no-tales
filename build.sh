@@ -22,12 +22,9 @@ MESH_SUBNET="10.24.24.0/24"
 
 echo "=== Deploying Node $NODE_NAME ==="
 
-# 1. Kill old instances if they exist
-sudo podman rm -f "$SIDECAR_NAME" "$APP_NAME" >/dev/null 2>&1 || true
-
 # 2. Launch the core application container onto the macvlan network
 echo "[*] Starting App Container: $APP_NAME on IP $IP"
-sudo podman run -d \
+sudo podman run -d --replace \
   --name "$APP_NAME" \
   --network vlan:ip=$IP \
   udp-counter node "$NODE_NAME" 9000 10
@@ -35,7 +32,7 @@ sudo podman run -d \
 # 3. Launch the sidecar sharing the EXACT same network namespace
 # It requires NET_ADMIN to implement the TPROXY rules inside that namespace
 echo "[*] Attaching Sidecar Proxy: $SIDECAR_NAME"
-sudo podman run -d \
+sudo podman run -d --replace \
   --name "$SIDECAR_NAME" \
   --network "container:$APP_NAME" \
   --cap-add NET_ADMIN \
