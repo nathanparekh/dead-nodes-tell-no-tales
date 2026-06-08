@@ -2,17 +2,19 @@
 # test_local_b.sh
 set -euo pipefail
 
-PORT=9000
+PORT=5000
 EXPECTED=30
 TIMEOUT_MS=5000
 STABLE_POLLS=10
 B_CONTAINER=counter-b
 
 echo "Reset all counters to 10."
-# Note: Ensure nodes are freshly deployed or sidecars accept direct local loopback tools
 /usr/local/bin/counter reset "$A_HOST" "$PORT" 10
+echo "a reset"
 /usr/local/bin/counter reset "$B_HOST" "$PORT" 10
+echo "b reset"
 /usr/local/bin/counter reset "$C_HOST" "$PORT" 10
+echo "c reset"
 
 echo "Initial state:"
 /usr/local/bin/counter sum "$A_HOST" "$PORT" "$B_HOST" "$PORT" "$C_HOST" "$PORT" \

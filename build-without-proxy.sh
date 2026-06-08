@@ -38,10 +38,10 @@ sudo podman run -d --replace \
 
 # 3. Launch the sidecar sharing the EXACT same network namespace
 # It requires NET_ADMIN to implement the TPROXY rules inside that namespace
-echo "[*] Attaching Sidecar Proxy: $SIDECAR_NAME"
-sudo podman run -d --replace \
-  --name "$SIDECAR_NAME" \
-  --network "container:$APP_NAME" \
-  --cap-add NET_ADMIN \
-  -e MESH_SUBNET="$MESH_SUBNET" \
-  rudp-sidecar
+# echo "[*] Attaching Sidecar Proxy: $SIDECAR_NAME"
+# sudo podman run -d --replace \
+#   --name "$SIDECAR_NAME" \
+#   --network "container:$APP_NAME" \
+#   --cap-add NET_ADMIN \
+#   -e MESH_SUBNET="$MESH_SUBNET" \
+#   rudp-sidecar

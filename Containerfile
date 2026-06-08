@@ -9,3 +9,5 @@ RUN apt-get update && apt-get install -y \
 COPY src/counter /usr/local/bin/counter
 
 ENTRYPOINT ["/usr/local/bin/counter"]
+
+STOPSIGNAL SIGKILL

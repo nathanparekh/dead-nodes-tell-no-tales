@@ -24,3 +24,12 @@ sudo podman run --rm -it \
   -e CONTAINER_HOST=unix:///run/podman/podman.sock \
   -e CONTAINER_CONNECTION=host-root-daemon \
   udp-test-runner
+
+
+# echo "Attaching Sidecar Proxy to test container"
+# sudo podman run -d --replace \
+#   --name "sidecar-test" \
+#   --network "container:udp-test-runner" \
+#   --cap-add NET_ADMIN \
+#   -e MESH_SUBNET="$MESH_SUBNET" \
+#   rudp-sidecar
