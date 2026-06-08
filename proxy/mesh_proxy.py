@@ -121,7 +121,7 @@ class MeshProxy:
                             remote_ip, []
                         ):
                             header = struct.pack(
-                                "!BIFF", 0, peer.send_seq, src_port, dst_port
+                                "!BIHH", 0, peer.send_seq, src_port, dst_port
                             )
                             packet = header + payload
                             self.proxy.tunnel_transport.sendto(
