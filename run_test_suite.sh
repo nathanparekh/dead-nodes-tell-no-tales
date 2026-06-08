@@ -4,21 +4,23 @@ set -euo pipefail
 
 # 1. Build the test suite runner container
 echo "Building udp-test-runner..."
-sudo podman build -t udp-test-runner -f Containerfile.tests .
+sudo podman build --network=host -t udp-test-runner -f Containerfile.tests .
 
-# 2. Ensure Podman system service is running on the host to accept remote connection
-if ! pgrep -f "podman system service" > /dev/null; then
-    echo "Starting host Podman system service daemon..."
+# 2. Ensure the HOST Podman system service is running as absolute root
+if ! sudo pgrep -f "podman system service" > /dev/null; then
+    echo "Starting root host Podman system service daemon..."
+    # Launching explicitly via sudo to handle CRIU root requirements
     sudo podman system service --time=0 unix:///run/podman/podman.sock &
-    sleep 1
+    sleep 2
 fi
 
-# 3. Run the specific test inside the macvlan network space
-# We pass the Podman socket, the checkpoint shared directory, and target the network
+# 3. Run the test runner, forcing standard podman to route through the host socket
 echo "Executing test runner environment..."
 sudo podman run --rm -it \
   --network vlan \
+  --privileged \
   -v /run/podman/podman.sock:/run/podman/podman.sock:rw \
   -v /tmp:/tmp:rw \
   -e CONTAINER_HOST=unix:///run/podman/podman.sock \
+  -e CONTAINER_CONNECTION=host-root-daemon \
   udp-test-runner

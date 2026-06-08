@@ -246,7 +246,9 @@ static int transfer(int argc, char **argv)
         return 1;
     }
 
-    snprintf(msg, sizeof(msg), "TRANSFER %s %s %d", argv[4], argv[5], to_int(argv[6]));
+    // ADDED PLACEHOLDER "tx123" AS THE FIRST PARAMETER AFTER TRANSFER
+    // fix later
+    snprintf(msg, sizeof(msg), "TRANSFER tx123 %s %s %d", argv[4], argv[5], to_int(argv[6]));
 
     if (request_udp(argv[2], argv[3], msg, reply, 1000) != 0)
         return 1;
@@ -323,7 +325,8 @@ static int sum(int argc, char **argv)
         if (ok_a == 0 && ok_b == 0 && ok_c == 0)
         {
             int total = a + b + c;
-            printf("SUM a=%d b=%d c=%d total=%d expected=%d %s\n", a, b, c, total, expected, (total == expected) ? "PASS" : "FAIL");
+            printf("SUM a=%d b=%d c=%d total=%d expected=%d %s\n", a, b, c, total, expected,
+                   (total == expected) ? "PASS" : "FAIL");
 
             stable = (total == expected) ? stable + 1 : 0;
             if (stable >= stable_needed)
@@ -364,4 +367,3 @@ int main(int argc, char **argv)
     fprintf(stderr, "unknown command: %s\n", argv[1]);
     return 1;
 }
-
