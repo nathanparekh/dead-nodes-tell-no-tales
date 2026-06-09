@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+
+# Copy the automated blasting script we just made
+COPY chat.py .
+
+# Leave the arguments out of the ENTRYPOINT so we can pass them via podman run
+ENTRYPOINT ["python", "-u", "chat.py"]
