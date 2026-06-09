@@ -3,8 +3,8 @@
 set -euo pipefail
 
 # 1. Build the test suite runner container
-echo "Building udp-test-runner..."
-sudo podman build --network=host -t udp-test-runner -f Containerfile.tests .
+echo "Building test-runner..."
+sudo podman build --network=host -t test-runner -f Containerfile.test .
 
 # 2. Ensure the HOST Podman system service is running as absolute root
 if ! sudo pgrep -f "podman system service" > /dev/null; then
@@ -24,7 +24,7 @@ sudo podman run --rm -it \
   -e CONTAINER_HOST=unix:///run/podman/podman.sock \
   -e CONTAINER_CONNECTION=host-root-daemon \
   --name test-container \
-  udp-test-runner
+  test-runner
 
 
 echo "Attaching Sidecar Proxy to test container"
@@ -33,4 +33,4 @@ sudo podman run -d --replace \
   --network "container:test-container" \
   --cap-add NET_ADMIN \
   -e MESH_SUBNET="$MESH_SUBNET" \
-  rudp-sidecar
+  sidecar

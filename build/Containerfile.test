@@ -1,4 +1,5 @@
 FROM docker.io/library/debian:bookworm-slim
+WORKDIR /test
 
 # 1. Add backports for up-to-date network packages
 RUN apt-get update && apt-get install -y ca-certificates && \
@@ -14,14 +15,14 @@ RUN apt-get update && apt-get install -y \
 ENV CONTAINER_HOST=unix:///run/podman/podman.sock
 
 # Copy the compiled C counter app into system PATH
-COPY src/counter /usr/local/bin/counter
+COPY ../src/counter /usr/local/bin/counter
 
 # Copy tests layout
-COPY tests/run_tests.sh /usr/local/bin/run_tests
-COPY tests/ /tests/
+COPY ../test/run_tests.sh run_tests
+COPY ../test/ .
 
-RUN chmod +x /usr/local/bin/run_tests /tests/*.sh
+RUN chmod +x run_tests *.sh
 
-ENTRYPOINT ["/usr/local/bin/run_tests"]
+ENTRYPOINT ["./run_tests"]
 
 STOPSIGNAL SIGKILL
