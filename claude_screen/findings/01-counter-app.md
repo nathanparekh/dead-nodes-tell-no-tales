@@ -50,6 +50,22 @@ overflow (UB / wrap).
 **Fix:** Reject non-positive amounts; bound-check against current balance and INT_MAX;
 consider unsigned/checked arithmetic.
 
+## C3b — No insufficient-funds check; balance can go negative; `sum()` can overflow  [MEDIUM, confidence high]
+**Where:** TRANSFER `counter -= amount` (`:196`) with no `counter >= amount` guard;
+`sum()` `int total = a + b + c` (`:327`).
+**What:** A node will debit below zero (no balance check), producing a negative balance
+that is still reported as valid state. The three-way `total` in `sum()` is a plain `int`
+and can overflow if balances are large (e.g. after the mint bug C3/SEC2). These are
+separate from the negative-*amount* mint in C3.
+**Fix:** Reject `amount > counter` (or allow explicit overdraft policy); use a wider type
+and overflow checks for `total`.
+
+## C10 — `recvfrom` error in `node()` busy-loops  [LOW, confidence medium]
+**Where:** `node()` `:174-176` — `if (n < 0) continue;`.
+**What:** A persistent `recvfrom` error (e.g. the socket entering a bad state) causes a
+tight `continue` loop that spins the CPU with no backoff or logging.
+**Fix:** Log and/or back off on repeated errors; distinguish `EINTR` from real failures.
+
 ## C4 — `IPV6_V6ONLY` set on an AF_INET (IPv4) socket  [LOW, confidence high]
 **Where:** `bind_udp()`, `counter.c:33`.
 **What:** `setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, ...)` is applied to a socket created

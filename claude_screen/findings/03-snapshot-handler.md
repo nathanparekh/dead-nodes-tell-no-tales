@@ -19,6 +19,11 @@ flushes. The delivery also can't know where to send (`target_local_ip` missing).
 positional argument: 'target_local_ip'`.
 **Fix:** Thread `target_local_ip` (the recorded destination) through `channel_states` and
 pass it; pylint/mypy can't catch this because `self.proxy` is untyped — add a type hint.
+**Note (why it can't be a one-line fix):** the cache itself doesn't even *record*
+`target_local_ip` — `process_message` stores only `{seq,payload,src_port,dst_port}`
+(`:79-89`), dropping the `exact_local_ip` that `process_and_deliver` needs. So fixing S1
+also requires capturing the destination IP at record time. (Independently flagged by the
+workflow's distsys pass.)
 
 ## S2 — `recv_buffer` flush unpacks 3 values from a 4-tuple → `ValueError`  [CRITICAL, confidence high — reproduced]
 **Where:** `_finish_global_snapshot` `next_payload, next_src_port, next_dst_port =

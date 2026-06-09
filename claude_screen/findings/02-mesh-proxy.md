@@ -77,6 +77,10 @@ misrouted, silently breaking the connection illusion. The fallback is only logge
 surfaced.
 **Fix:** Make the spoof-socket pool keyed/refcounted; treat a transparent-bind failure as
 a hard error, not a silent degradation.
+**Addendum (fd leak):** On the bind-fallback path the *original* `sock` (already created at
+`:167`) is overwritten by a new socket at `:178` **without being closed** → a file
+descriptor leaks on every bind failure. (Confirmed by the workflow's netcfg pass.) Close
+the original before reassigning.
 
 ## M8 — Startup race: MESH/marker sends before `tunnel_transport` is set  [LOW, confidence medium]
 **Where:** `start()` registers the local reader (`:219`) **before** the tunnel datagram
@@ -106,6 +110,32 @@ IPs and force unbounded `peers`/`routing_table` growth.
 `import random` unused (`:3`); unused `e` (`:174`) and `flags` (`:234`). Confirmed by
 pyflakes/pylint/vulture (`analysis_output/31_pyflakes.txt`, `34`, `37`). Cosmetic but
 signals the retransmit/error paths are under-exercised.
+
+## M13 — The `MESH_SUBNET` env var is ignored by the proxy (uses hardcoded `config.py`)  [HIGH, confidence high]
+**Where:** `entrypoint.sh` auto-detects/exports `MESH_SUBNET` (`:4-11`) and `build.sh:46`
+passes `-e MESH_SUBNET=...`, and the **iptables** rules use `$MESH_SUBNET` (`entrypoint.sh:17`).
+But `mesh_proxy.py` gets `MESH_SUBNET` from `from config import *` (hardcoded
+`"10.24.24.0/24"`, `config.py:11`) and **never reads `os.environ`** — `self.mesh_network`
+is built from the config constant (`:150`).
+**Why it's a bug:** The data-plane interception scope (iptables, env-driven) and the
+proxy's mesh-membership decision (`ipaddress.ip_address(target) in self.mesh_network`,
+`:263`) are configured from **two different sources**. If the env/auto-detected subnet ever
+differs from `10.24.24.0/24` (e.g. a different deployment, or entrypoint's auto-detection
+picking another CIDR — N2), iptables will TPROXY traffic the proxy then classifies as
+`EXTERNAL` (or vice-versa) → misrouting/black-holing. The careful env plumbing is silently
+dead for the Python side.
+**Fix:** Read `MESH_SUBNET` from the environment in `config.py`/`mesh_proxy.py`
+(`os.environ.get("MESH_SUBNET", "10.24.24.0/24")`).
+
+## M14 — `asyncio.create_task(...)` results are not retained → tasks may be GC'd mid-flight  [HIGH, confidence high]
+**Where:** `:229` `asyncio.create_task(self._retransmit_loop())` and `:272`
+`asyncio.create_task(self._probe_target(target_ip))` — neither return value is stored.
+**Why it's a bug:** CPython keeps only a **weak** reference to tasks; the docs explicitly
+warn to keep a strong reference or "the task may be garbage-collected at any time, even
+before it's done." The retransmit loop (the entire reliability mechanism) and in-flight
+probes can therefore be collected and silently stop. This is intermittent and
+load/GC-dependent, which makes it nasty to debug.
+**Fix:** Store tasks in a set on the proxy (`self._tasks.add(t); t.add_done_callback(self._tasks.discard)`).
 
 ## M12 — Retransmit loop mutates `unacked` while iterating; uses wall-clock  [LOW, confidence medium]
 **Where:** `_retransmit_loop` `:308-317`.
