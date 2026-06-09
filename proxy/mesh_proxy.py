@@ -115,6 +115,8 @@ class MeshProxy:
         self.probe_buffer = {}  # IP -> list of pending packets
         self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)
 
+        self.local_port_map = {}
+
     def get_peer(self, ip):
         if ip not in self.peers:
             self.peers[ip] = PeerState()
@@ -155,7 +157,11 @@ class MeshProxy:
 
         if not consumed:
             spoof_sock = self.get_spoof_sock(ip, src_port)
-            spoof_sock.sendto(p, ("127.0.0.1", dst_port))
+
+            target_local_ip = self.local_port_map.get(
+                dst_port, self.get_local_mesh_ip()
+            )
+            spoof_sock.sendto(p, (target_local_ip, dst_port))
 
     async def _probe_target(self, target_ip):
         """Actively probe an IP to see if it has a proxy sidecar."""
@@ -196,6 +202,22 @@ class MeshProxy:
 
         asyncio.create_task(self._retransmit_loop())
 
+    def get_local_mesh_ip(self):
+        if hasatr(self, "_cached_mesh_ip"):
+            return self._cached_mesh_ip
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            target = str(next(self.mesh_network.hosts()))
+            s.connect((target, 1))
+            self._cached_mesh_ip = s.getsockname()[0]
+        except Exception:
+            self._cached_mesh_ip = "127.0.0.1"
+        finally:
+            s.close()
+
+        return self._cached_mesh_ip
+
     def _handle_local_intercept(self):
         """Read intercepted packets, extract original IP:PORT."""
         try:
@@ -212,6 +234,8 @@ class MeshProxy:
 
                 orig_src_port = addr[1]
                 orig_src_ip = addr[0]
+
+                self.local_port_map[orig_src_port] = orig_src_ip
 
                 target_ip = None
                 target_port = None
