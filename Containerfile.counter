@@ -1,0 +1,13 @@
+FROM python:3.11-alpine
+ENV PYTHONUNBUFFERED=1
+RUN apk add --no-cache iptables iproute2
+WORKDIR /app
+
+
+COPY /home/admin/dead-nodes-tell-no-tales/src/counter.py .
+
+RUN chmod +x counter.py
+
+ENTRYPOINT ["./counter.py"]
+
+STOPSIGNAL SIGKILL
