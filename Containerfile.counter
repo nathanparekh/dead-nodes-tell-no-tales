@@ -4,7 +4,7 @@ RUN apk add --no-cache iptables iproute2
 WORKDIR /app
 
 
-COPY /home/admin/dead-nodes-tell-no-tales/src/counter.py .
+COPY src/counter.py .
 
 RUN chmod +x counter.py
 

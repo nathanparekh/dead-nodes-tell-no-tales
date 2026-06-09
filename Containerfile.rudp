@@ -3,10 +3,10 @@ ENV PYTHONUNBUFFERED=1
 RUN apk add --no-cache iptables iproute2
 WORKDIR /proxy
 
-COPY ../proxy/config.py .
-COPY ../proxy/mesh_proxy.py .
-COPY ../proxy/snapshot_handler.py .
-COPY ../proxy/entrypoint.sh .
+COPY proxy/config.py .
+COPY proxy/mesh_proxy.py .
+COPY proxy/snapshot_handler.py .
+COPY proxy/entrypoint.sh .
 
 RUN chmod +x entrypoint.sh
 
