@@ -37,7 +37,12 @@ to 3 with no recipient; the 7 is gone and `transfer` still printed `OK`.
 **Fix:** Make the transfer a two-phase / acked protocol: only debit after the credit is
 acknowledged by the receiver (or use a durable outbox with retry + idempotent apply).
 
-## C2 — Constant transaction id `tx123` + no idempotency → double-credit / mint  [HIGH, confidence high]
+## C2 — Constant transaction id `tx123` + no idempotency → double-credit / mint  [HIGH headline; retransmit-framing OVERSTATED — see 10-correctness-audit.md]
+> **AUDIT:** the headline (constant `tx123` + no CREDIT dedup) **holds**. But the specific
+> *"lost-ACK → double-credit via ordinary RUDP retransmit"* mechanism is **defeated by
+> tunnel seq-dedup** (`mesh_proxy.py:94,120-126`) — a retransmit reuses the seq and is dropped
+> once `recv_seq` advances. Double-apply is only reachable **across migration / the EXTERNAL
+> fallback** (where seq state resets or doesn't apply), so that framing is narrower than stated.
 **Where:** `transfer()` builds `"TRANSFER tx123 ..."` (`counter.c:251`, marked "fix later");
 `node()` CREDIT handler applies every credit unconditionally (`counter.c:184-191`).
 **What:** Every transfer reuses the literal `tx123`, and the CREDIT handler has **no

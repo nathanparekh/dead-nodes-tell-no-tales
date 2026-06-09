@@ -5,6 +5,11 @@
 > stands. All counter financial/auth bugs carried over to `counter.py` (re-proven). See
 > **`09-merge-impact.md`** for the full delta (fixed: C4, B1, B2, B7, B8; moot: integer
 > overflow; relocated: B6 → `run_test_suite.sh`; new: CP1 blanket-except).
+>
+> **CORRECTNESS AUDIT (`10-correctness-audit.md`):** an adversarial self-review confirmed
+> **~80% of findings hold** (incl. all 8 runtime-reproduced). **False positives:** M8, M14,
+> N7 (and B1/B2/B3 post-merge). **Overstated (severity corrected):** C2 (retransmit framing),
+> M9, M12, S9 (priority), S10, D2, D3, N1, SEC4, B13. **Obsolete:** C4, C8, B7, B8.
 
 ~70 curated findings across the app, the checkpointing proxy, and the build/test harness.
 Confidence/verdict reflects both manual analysis and an independent 100-agent review pass

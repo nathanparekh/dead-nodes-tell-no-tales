@@ -24,7 +24,9 @@ claude_screen/
 │   ├── 07-aux-tools.md        ← redis/tcp-howto/chat/udp (A1–A8)
 │   ├── 08-security.md         ← SEC1–SEC6
 │   ├── 09-merge-impact.md     ← effect of the post-review merge (C→Python rewrite + reorg)
+│   ├── 10-correctness-audit.md← adversarial self-review: false positives / overstated / obsolete
 │   ├── _workflow_raw.{md,json}← raw 100-agent output (traceability)
+│   ├── _correctness_audit_raw.{md,json}← raw audit-pass output
 │   └── _completeness_critic.md
 ├── harness/                   ← reproducible static-analysis containers
 │   ├── Containerfile.tools    ← gcc/clang/cppcheck/shellcheck

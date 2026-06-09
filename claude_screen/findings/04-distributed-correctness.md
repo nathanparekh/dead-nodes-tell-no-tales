@@ -27,7 +27,10 @@ to survive the checkpoint of `sidecar-b` and correct seq-state restore.
 (treat a downed peer as "MESH, temporarily unreachable", not EXTERNAL); only fall back to
 raw send for genuinely non-mesh addresses.
 
-## D2 — Checkpoint/restore ordering of two containers sharing one netns is unsound  [MEDIUM, confidence medium]
+## D2 — Checkpoint/restore ordering of two containers sharing one netns is unsound  [MEDIUM → LOW, see 10-correctness-audit.md]
+> **AUDIT: overstated.** Containers aren't removed during checkpoint, and restore already does
+> netns-owner-first (`test/test_local_b.sh:37` then `:38`). Latent/undocumented ordering
+> dependency, not a present failure. Downgrade to low.
 **Where:** `tests/test_local_b.sh:26-38`; sidecar launched `--network container:counter-b`
 (`build.sh:42-47`).
 **What:** The test checkpoints `counter-b` first (default checkpoint **stops** it), then
@@ -38,7 +41,9 @@ container with the original id, which a fresh `restore` may not provide.
 **Fix:** Checkpoint/restore the pair as a unit (a pod), or restore the netns owner first
 and re-establish the join explicitly; document the required ordering.
 
-## D3 — `checkpoint` omits `--tcp-established` though `restore` uses it (and the comment says to)  [MEDIUM, confidence medium]
+## D3 — `checkpoint` omits `--tcp-established` though `restore` uses it (and the comment says to)  [MEDIUM → NIT, see 10-correctness-audit.md]
+> **AUDIT: functionally moot.** Real asymmetry, but there are **no `SOCK_STREAM`/TCP sockets**
+> in the deployed code (all UDP), so the flag is inert here. Doc/consistency nit.
 **Where:** `tests/test_local_b.sh:23-27` (checkpoint, no flag) vs `:37-38` (restore, with
 flag). The comment at `:24` says to use it "to freeze network interface sockets properly."
 **Why it's a bug/risk:** podman/CRIU expect consistent `--tcp-established` handling between

@@ -1,0 +1,748 @@
+{
+  "auditVerdicts": [
+    {
+      "finding_id": "C1",
+      "title": "Non-atomic TRANSFER destroys money on delivery failure",
+      "verdict": "holds",
+      "reasoning": "counter.py lines 62-77: node does counter -= amount (line 70) then fire-and-forget send_udp() (line 74) with no ACK/retry/rollback, replies OK TRANSFER (line 76) regardless of send_udp() result. Merged transfer logic is identical to original C version. Runtime reproduced in repros/output/repro_counter_py.txt.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C2",
+      "title": "Constant transaction id tx123 + no idempotency to double-credit / mint",
+      "verdict": "holds",
+      "reasoning": "counter.py line 99: transfer() still hardcodes 'TRANSFER tx123' literal. Lines 52-61: CREDIT handler applies every credit unconditionally with no dedup on txid. No idempotency safeguard added in rewrite. Merge impact doc confirms 'carried-over'.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C3",
+      "title": "No bounds / sign validation on amounts (negative transfer mints funds; overflow)",
+      "verdict": "holds",
+      "reasoning": "counter.py line 68: amount = int(parts[4]) with no validation. Line 70: counter -= amount accepts negative values. Negative amounts still cause balance to increase (mint). Integer overflow is moot under Python big-ints per merge impact doc, but negative-amount mint persists. Runtime reproduced in repros/output/repro_counter_py.txt.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C3b",
+      "title": "No insufficient-funds check; balance can go negative; sum() can overflow",
+      "verdict": "holds",
+      "reasoning": "counter.py line 70: counter -= amount with no counter >= amount guard. Line 147: total = a + b + c uses Python arbitrary-precision int so overflow is moot, but negative balance remains possible. Merge impact doc confirms negative-balance half 'carried-over', overflow half 'made moot'.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C4",
+      "title": "IPV6_V6ONLY set on an AF_INET (IPv4) socket",
+      "verdict": "obsolete_after_merge",
+      "reasoning": "counter.py bind_udp() lines 12-16 sets only SO_REUSEADDR on AF_INET socket, no IPV6_V6ONLY. This C-specific bug (line 33 in counter.c) was removed in the Python rewrite. Merge impact doc explicitly lists as 'Fixed by the rewrite'.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C5",
+      "title": "Socket-call return values ignored",
+      "verdict": "holds",
+      "reasoning": "counter.py line 74: send_udp() return value is checked but ignored by caller. Line 88-89: entire node() loop wrapped in blanket except Exception: pass that silently swallows send failures. Merge impact doc confirms 'carried-over (now swallowed by a blanket except)' and rates it worse. CP1 rated HIGH by independent re-eval.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C6",
+      "title": "Reply accepted from any source (no validation)",
+      "verdict": "holds",
+      "reasoning": "counter.py line 32 in request_udp(): sock.recvfrom(BUF) accepts reply from any source with no address verification. Merge impact doc confirms 'carried-over'. Identical vulnerability as counter.c version.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C7",
+      "title": "to_int() swallows malformed numeric input",
+      "verdict": "holds",
+      "reasoning": "counter.py lines 68, 81, 122: uses int(...) which raises on bad input. Exceptions caught by blanket except at line 88-89, causing malformed messages to be silently dropped with no reply. Merge impact doc notes 'changed in character' but remains a robustness gap \u2014 different failure mode (no reply vs mis-parsed 0), same problem.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C8",
+      "title": "(verified safe) sscanf field widths vs buffers",
+      "verdict": "obsolete_after_merge",
+      "reasoning": "C-specific buffer overflow analysis. Python strings are dynamically sized; no fixed-width buffer issues. Verdict was 'INFO' (negative finding). Not applicable to counter.py.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C9",
+      "title": "App never triggers the in-band snapshot path",
+      "verdict": "holds",
+      "reasoning": "counter.py (all 210 lines) contains no code emitting '__START_SNAPSHOT__' token. Snapshot machinery in proxy/snapshot_handler.py remains unreachable from the deployed Python app. Merge impact doc confirms 'carried-over (snapshot path still dead)'.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "C10",
+      "title": "recvfrom error in node() busy-loops",
+      "verdict": "holds",
+      "reasoning": "counter.py lines 44-89: entire receive loop wrapped in except Exception: pass. Persistent socket errors cause tight loop spin without backoff or logging. Merge impact doc confirms 'carried-over (blanket except spins on any error)'. CP1 independent re-eval rates this HIGH \u2014 blanket except masks both decode/send errors AND truncated commands get no reply.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "SEC2",
+      "title": "No auth on RESET/TRANSFER/CREDIT",
+      "verdict": "holds",
+      "reasoning": "counter.py lines 49-87: node() accepts STATE/CREDIT/TRANSFER/RESET from any source with no authentication checks. No mechanism to verify sender identity. Merge impact doc confirms 'carried-over \u2014 reproduced (unauth RESET 999999)' in repros/output/repro_counter_py.txt.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/src/counter.py"
+    },
+    {
+      "finding_id": "M1",
+      "title": "recv_buffer tuple arity is inconsistent across modules",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py lines 121-126 store 4-tuples: (payload, orig_src_port, orig_dst_port, exact_local_ip). Lines 107-109 unpack as 4-tuples. However, snapshot_handler.py line 155 stores 3-tuples: (payload, src_port, dst_port). Lines 143-145 unpack as 3-tuples. When snapshot_handler places a buffered message back into recv_buffer, it stores a 3-tuple. If mesh_proxy then tries to flush that same buffer at line 107-109, the unpack of 4 values fails. This is a real arity mismatch that causes ValueError.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M2",
+      "title": "Blocking synchronous HTTP call on the asyncio event loop",
+      "verdict": "holds",
+      "reasoning": "snapshot_handler.py line 109 executes urllib.request.urlopen(req, timeout=30) inside _trigger_app_snapshot_out_of_band. This is called from process_message at line 37, which is called from _handle_local_intercept at line 239. _handle_local_intercept is registered as a loop.add_reader callback at mesh_proxy.py:219, meaning it runs on the event loop thread. The 30-second urlopen blocks the entire event loop, stalling all async work.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M3",
+      "title": "Only BlockingIOError is caught in the intercept drain loop",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py lines 232-306 wrap _handle_local_intercept in try/except BlockingIOError. Any other exception (struct.error from malformed cmsg at line 251, ValueError/TypeError from tuple unpacking mismatches) will escape and abort the drain. The loop body has no await, so a single exception kills the current drain cycle. This matches the finding's description exactly.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M4",
+      "title": "Head-of-line blocking + unbounded buffers",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py line 94 enforces strict in-order: 'if seq == peer.recv_seq'. Any seq gap causes buffering at line 121. No GC or timeout clears old recv_buffer entries. If a seq is lost, all later packets wait forever. buffers (recv_buffer, probe_buffer, unacked, peers, routing_table) are never bounded. This is as described.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M5",
+      "title": "Marker shares data send_seq but uses different wire format",
+      "verdict": "holds",
+      "reasoning": "snapshot_handler.py line 46 uses struct.pack('!BIHH', 0, peer_state.send_seq, 0, 0) for the marker header (Type + Seq(4-byte int) + two shorts). But mesh_proxy.py line 288 uses struct.pack('!BQHH4s', 0, peer.send_seq, ...) for data (Type + Seq(8-byte long) + two shorts). The marker uses 4-byte seq while data uses 8-byte seq, yet both increment the same peer_state.send_seq counter. The receiver's in-order logic expects 8-byte seqs, so an 8-byte read of the marker's seq field will read garbage.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M6",
+      "title": "Probe timeout \u2192 peer pinned EXTERNAL; EXTERNAL packets not retried",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py lines 193-208: _probe_target sends PROBE, sleeps 0.1s, then marks EXTERNAL. EXTERNAL packets at lines 301-303 are sent once via spoof socket and are not added to unacked (only MESH packets at line 298 are). PROBE_COOLDOWN=5.0 prevents reprobe for 5s. If a destination is momentarily down during probe, it's marked EXTERNAL and the packet is lost without retry, defeating the buffer-and-retry purpose.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M7",
+      "title": "Spoof-socket LRU eviction + silent bind fallback break source spoofing",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py lines 163-165: MAX_SPOOF_SOCKETS=512, eviction closes sockets. Lines 172-179: bind fails \u2192 fallback creates a socket WITHOUT IP_TRANSPARENT, SO_REUSEPORT set (line 178 only sets SO_MARK). This causes packets to appear from the proxy's ephemeral address, not the spoofed source, breaking the illusion. Line 174 unused variable 'e' confirms the exception is swallowed silently. Additionally, the original 'sock' at line 167 is overwritten without closing, leaking file descriptors on every bind failure.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M8",
+      "title": "Startup race: MESH/marker sends before tunnel_transport is set",
+      "verdict": "overstated",
+      "reasoning": "The MESH branch (mesh_proxy.py:297) cannot be reached during startup because MESH state requires prior PROBE_ACK reception, which requires tunnel_transport to already exist. However, the marker broadcast path (snapshot_handler.py:48) IS vulnerable: if __START_SNAPSHOT__ arrives before line 226-228 create_datagram_endpoint completes, and if peers exist from prior tunnel traffic, the marker broadcast at line 48 calls tunnel_transport.sendto without a guard. But the finding groups both MESH and marker as equally vulnerable, which overstates the MESH case. The marker case is real but only if a snapshot is triggered during the narrow startup window, which requires prior tunnel activity.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M9",
+      "title": "cmsg parse lacks length validation; assumes single AF_INET ancillary record",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py lines 249-253 iterate ancdata and unpack cmsg_data[2:4] (port) and cmsg_data[4:8] (IP) without checking len(cmsg_data) >= 8. If cmsg_data is truncated or malformed, struct.unpack raises struct.error. The family field at offset 0-2 is not validated (assumed AF_INET implicitly). Per M3, this exception escapes and aborts the drain.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M10",
+      "title": "Memory exhaustion via auto-created peers from arbitrary tunnel sources",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py line 154 calls self.peers[ip] = PeerState() for any remote_ip in TunnelProtocol.datagram_received (line 40). There's no authentication on the tunnel and no peer table cap. An attacker can spoof many source IPs and create unbounded peers/routing_table entries, exhausting memory.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M11",
+      "title": "Dead/unused code",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py line 3: 'import random' is imported but never used. Line 174: 'except OSError as e' \u2014 the exception 'e' is caught but never referenced. Line 234: 'flags' is received from recvmsg but never used. Confirmed by static analysis tools. This signals under-exercised error paths.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M13",
+      "title": "MESH_SUBNET env var is ignored by the proxy",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py line 150 uses 'self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)' where MESH_SUBNET is imported from config.py line 11 (hardcoded '10.24.24.0/24'). The code never reads os.environ['MESH_SUBNET'], so even though entrypoint.sh exports it, the proxy ignores it. If deployed with a different subnet, iptables and the proxy's classification diverge.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M14",
+      "title": "asyncio.create_task(...) results not retained \u2192 tasks may be GC'd",
+      "verdict": "false_positive",
+      "reasoning": "mesh_proxy.py line 229: 'asyncio.create_task(self._retransmit_loop())' creates a task for _retransmit_loop, which is an infinite loop (line 309: while True). The task awaits asyncio.sleep(0.1) at line 317 but immediately loops back. Similarly, line 272: _probe_target awaits only once at line 198, then returns. However, the concern about weak references is partially valid for one-shot async functions, but _retransmit_loop is long-lived and runs continuously. While not storing the task is not best practice, the infinite loop keeps the task alive as long as the proxy runs. The finding warns tasks 'may be garbage-collected at any time', but a task in an infinite loop awaiting on sleep cannot be collected (it's referenced by the event loop's ready queue and sleep timer). For _probe_target (a one-shot), the task completes and can be dropped once it returns at line 208, which is fine.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "M12",
+      "title": "Retransmit loop mutates peers while iterating; uses wall-clock",
+      "verdict": "holds",
+      "reasoning": "mesh_proxy.py lines 311-316: '_retransmit_loop' iterates 'for ip, peer in self.peers.items()' without making a copy, while datagram_received (line 40) calls get_peer which can add entries (line 154). In single-threaded asyncio, the loop body has no await (lines 312-316 are all sync), so mid-iteration adds are missed until next tick. Additionally, line 310 uses 'time.time()' (wall clock) instead of 'loop.time()' (monotonic). A clock step or CRIU restore with time jump can cause retransmit storms. The finding is correct: the list mutability issue and wall-clock use are both real.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/mesh_proxy.py (and proxy/snapshot_handler.py)"
+    },
+    {
+      "finding_id": "S1",
+      "title": "process_and_deliver called with too few arguments \u2192 TypeError",
+      "verdict": "holds",
+      "reasoning": "Lines 137-139 and 146-152 call self.proxy.process_and_deliver(seq, payload, remote_ip, src_port, dst_port) with 5 positional arguments. However, the method definition at mesh_proxy.py:183-185 requires 6 positional arguments: process_and_deliver(self, current_seq, p, ip, src_port, dst_port, target_local_ip). Repro output confirms: 'MeshProxy.process_and_deliver() missing 1 required positional argument: target_local_ip'. Additionally, line 155 writes a 3-tuple to recv_buffer when 4-tuples are expected, and the recorded messages do not capture exact_local_ip, creating a cascading failure.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S2",
+      "title": "recv_buffer flush unpacks 3 values from a 4-tuple \u2192 ValueError",
+      "verdict": "holds",
+      "reasoning": "Lines 143-145 unpack peer.recv_buffer.pop(...) into 3 variables: 'next_payload, next_src_port, next_dst_port =', but mesh_proxy.py:121-126 stores 4-tuples: (payload, orig_src_port, orig_dst_port, exact_local_ip). Repro output confirms: 'ValueError: too many values to unpack (expected 3)'. This crashes when the buffer contains messages from live protocol operation.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S3",
+      "title": "Snapshot writes 3-tuple into recv_buffer, poisoning live path",
+      "verdict": "holds",
+      "reasoning": "Line 155 writes a 3-tuple (payload, src_port, dst_port) to peer.recv_buffer[seq], but mesh_proxy.py:107-108 expects to unpack 4 values when flushing the buffer during live operation. Even if S1 and S2 are fixed, this malformed entry will crash the next in-order flush in the live code path.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S4",
+      "title": "Broadcast MARKER wire-format is unparseable; receivers never recognize markers",
+      "verdict": "holds",
+      "reasoning": "Line 46 sends markers with struct.pack('!BIHH', 0, peer_state.send_seq, 0, 0) producing a 9-byte header (1+4+2+2=9 bytes). mesh_proxy.py:79 parses '!QHH4s' from data[1:17], expecting a 17-byte total packet. Repro confirms: sent_seq=7 but parser reads seq=30064771072 (the 4-byte field misaligned as 8 bytes), and recovered payload is b'__:123e4567-...' with startswith(b'__MARKER__:')=False. Cross-node Chandy-Lamport markers are never recognized.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S5",
+      "title": "Marker is never ACKed \u2192 retransmitted forever",
+      "verdict": "holds",
+      "reasoning": "Line 51 stores unacked[peer_state.send_seq] with a 4-byte seq (from line 46 pack format 'I'). But the receiver at mesh_proxy.py:90-91 ACKs the 8-byte seq it mis-parsed due to S4's wire format mismatch. Repro confirms: unacked key=7, but receiver would ACK seq=30064771072. The ACK seq never matches the unacked key, so retransmit loop (mesh_proxy.py:308-317) resends indefinitely.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S6",
+      "title": "is_snapshotting never reset on failure \u2192 permanent traffic black-hole",
+      "verdict": "holds",
+      "reasoning": "Line 35 sets is_snapshotting=True. It is only reset at line 119 in _finish_global_snapshot(). The _trigger_app_snapshot_out_of_band() call at lines 105-115 swallows all exceptions with bare 'except Exception'. If the checkpoint agent is unreachable or fails, the exception is logged but state is not cleaned up, recording_channels never empties, _finish_global_snapshot is never called, and is_snapshotting remains True forever. Every subsequent in-flight message on recording channels (lines 79-89) is cached and never delivered, silently black-holing traffic.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S7",
+      "title": "Replay uses peer.recv_seq which is already advanced \u2192 buffered messages dropped",
+      "verdict": "holds",
+      "reasoning": "Line 136 replays with 'if seq == peer.recv_seq'. However, mesh_proxy.py:94-103 increments recv_seq when a message is first received, even if the snapshot controller caches it instead of delivering (line 103 'peer.recv_seq += 1' runs unconditionally). At replay time, recorded seqs are < recv_seq, so the == condition is never true and the '> peer.recv_seq' branch is also false. Messages are silently dropped. Repro BugD confirms: with recv_seq pre-advanced to 2, replay of seqs [0,1] delivers 0 messages.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S8",
+      "title": "Synchronous urllib checkpoint POST blocks the event loop",
+      "verdict": "holds",
+      "reasoning": "Line 109 calls urllib.request.urlopen(req, timeout=30) synchronously within _trigger_app_snapshot_out_of_band(), which is called at line 37 inside process_message(). Since this is called from the async TunnelProtocol.datagram_received handler (mesh_proxy.py), the synchronous 30-second network call blocks the entire event loop, preventing any concurrent message processing or retransmissions. This is the root cause of M2.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S9",
+      "title": "container_id = socket.gethostname() may target wrong container",
+      "verdict": "holds",
+      "reasoning": "Line 97 uses socket.gethostname() to identify the app container. The sidecar is launched with --network container:<app_id>, which shares the network namespace. However, --network does not guarantee UTS/hostname namespace sharing if the sidecar was assigned a different hostname at launch. If gethostname() returns the sidecar's identity instead of the app's, the checkpoint agent at :9090 would receive the wrong container_id and checkpoint the sidecar or wrong target. The hostname must be explicitly passed via environment variable to ensure correctness.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S10",
+      "title": "Snapshot ordering doesn't match Chandy-Lamport",
+      "verdict": "holds",
+      "reasoning": "Chandy-Lamport requires: (1) record local state, (2) send markers, (3) record incoming channels. Current code: line 37 calls _trigger_app_snapshot_out_of_band (checkpoint app) immediately, then line 46 broadcasts markers, then lines 54-55 initializes channel recording. The local state checkpoint precedes marker broadcast, violating the algorithm order. Furthermore, the checkpoint completes asynchronously (line 109 is synchronous but returns) without coordinating with marker receipt or channel state recording, so the snapshot lacks the required consistency cut.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "S11",
+      "title": "Dead import + typo",
+      "verdict": "holds",
+      "reasoning": "Line 3 'import os' is unused and not called anywhere in the module (confirmed by grep). Line 114 contains typo 'Failed to reac Checkpoint' (missing 'h' in 'reach'). Both are minor code quality issues.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/proxy/snapshot_handler.py"
+    },
+    {
+      "finding_id": "D1",
+      "title": "The headline test's premise fails: the credit is dropped, not queued",
+      "verdict": "cannot_determine",
+      "reasoning": "The finding's core claim\u2014that at transfer time A's sidecar has 'no route to B yet'\u2014depends critically on whether TPROXY intercepts inter-container traffic on the same machine. If A, B, C are separate machines (per ASSUMPTIONS), then inter-machine reset/state calls bypass A's sidecar entirely, so B is indeed never probed until the transfer, making D1 CORRECT. However, the test_local_b.sh uses `podman container checkpoint counter-b`, suggesting counter-b is a local container, not a remote machine. In a local container setup on one machine, TPROXY WOULD intercept traffic from counter-a to counter-b during reset (lines 11-17 of test_local_b.sh), probe B, mark it MESH, and the transfer would queue in `unacked` (mesh_proxy.py:298), not drop via spoof socket (lines 204-208). The actual test environment and topology are ambiguous. Code review shows: if B is ever marked MESH (lines 52, 267), subsequent MESH-state packets go via tunnel+unacked (lines 284-299), not spoof socket. EXTERNAL packets (lines 301-303) bypass `unacked` only if state=='EXTERNAL' AND cooldown expired (lines 259-261). D1 holds if inter-machine, but fails if intra-machine.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/04-distributed-correctness.md"
+    },
+    {
+      "finding_id": "D2",
+      "title": "Checkpoint/restore ordering of two containers sharing one netns is unsound",
+      "verdict": "holds",
+      "reasoning": "The test checkpoints counter-b (which owns the netns) first at line 26, then sidecar-b (which borrows via --network container:counter-b) at line 27. The finding correctly notes that checkpointing the namespace-borrower after the owner is already stopped is fragile. On restore (lines 37-38), sidecar-b's --network container:counter-b dependency must resolve correctly, but the dependencies and ordering are not explicitly managed. The code does execute (restore happens), but the assumption that the netns persists during checkpoint and is correctly reconstructed is undocumented. This is a valid structural concern, even if it may work in practice due to podman's internal handling.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/04-distributed-correctness.md"
+    },
+    {
+      "finding_id": "D3",
+      "title": "`checkpoint` omits `--tcp-established` though `restore` uses it (and the comment says to)",
+      "verdict": "holds",
+      "reasoning": "Line 24 of test_local_b.sh has a comment saying 'Use --tcp-established to freeze network interface sockets properly', but line 26 (checkpoint counter-b) and line 27 (checkpoint sidecar-b) do NOT include the flag. Lines 37-38 (restore) DO include --tcp-established. This asymmetry violates the principle that checkpoint and restore should use consistent flags. The finding notes the data path is UDP (not TCP), so the practical impact may be moot, but the inconsistency and ignored comment are real code issues. The asymmetry is a latent failure mode.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/04-distributed-correctness.md"
+    },
+    {
+      "finding_id": "D4",
+      "title": "After restore, the sender keeps B pinned EXTERNAL during `PROBE_COOLDOWN`",
+      "verdict": "holds",
+      "reasoning": "If B were ever marked EXTERNAL (e.g., during a failed probe), lines 259-261 prevent re-probing for PROBE_COOLDOWN seconds (5.0 seconds, config.py:8). The condition `state == 'EXTERNAL' and time.time() - last_probe_time > PROBE_COOLDOWN` means traffic during the cooldown window (lines 301-303) bypasses retransmission, sending directly via spoof socket instead. After restore completes (line 38), if B was marked EXTERNAL before removal, A will not re-probe for up to 5 seconds, keeping B pinned EXTERNAL and losing any in-flight packets during that window. The finding correctly identifies this as a retention issue for downed peers.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/04-distributed-correctness.md"
+    },
+    {
+      "finding_id": "D5",
+      "title": "The cut is uncoordinated, so in-flight tunnel state is inconsistent across migration",
+      "verdict": "holds",
+      "reasoning": "The test uses bare `podman checkpoint` with no quiesce (lines 26-27, test_local_b.sh). There is no Chandy-Lamport marker or snapshot coordination between A and B sidecars. The comment at lines 31-32 states 'Sidecar A will intercept this, queue it, and persistently retry behind the scenes', but this assumes the checkpoint is atomic and the queue state is preserved. In reality, if a TRANSFER packet is in flight when counter-b/sidecar-b is checkpointed, the `send_seq`/`recv_seq`/`unacked` state in both sidecars may be inconsistent. A packet could be delivered but not ACK'd before the checkpoint, and the restored state would not reflect this. snapshot_handler.py (lines 28-91) attempts to record in-flight messages during snapshots, but the implementation depends on __MARKER__ messages being sent in-band, which only happens if the app calls send_udp(...__START_SNAPSHOT__) \u2014 but the counter app never does this (counter.py has no such call). So the snapshot handler path is dead code, and checkpoints are uncoordinated. This finding is valid.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/04-distributed-correctness.md"
+    },
+    {
+      "finding_id": "D6",
+      "title": "(verified, fragile-but-OK) tunnel seq dedup across restore",
+      "verdict": "holds",
+      "reasoning": "The finding correctly observes that recv_seq is advanced synchronously in the same callback (mesh_proxy.py:94-103) before any await, so a checkpoint cannot interleave 'delivered but not counted'. If a post-restore retransmit re-delivers an already-counted seq, it is correctly dropped (line 120-126 checks `seq > peer.recv_seq` for out-of-order). The guarantee is real but fragile, depending on the checkpoint atomicity and the integrity of sidecar-b's in-memory state. The finding correctly labels this as 'fragile-but-OK' with the caveats that D2 and D5 must hold (shared-netns ordering, coordinated cut). Since D2 and D5 are themselves problematic (per above), D6's assumption is weakened. However, the narrow claim about seq dedup logic is sound: the synchronous advance at line 103 does prevent the interleaving window.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/04-distributed-correctness.md"
+    },
+    {
+      "finding_id": "B1",
+      "title": "Images COPY a prebuilt `src/counter` that nothing builds and that is absent",
+      "verdict": "false_positive",
+      "reasoning": "The finding claimed that Containerfile:9, Containerfile.tests:17, and test_without_proxy/Containerfile:2 all copy `COPY src/counter`. After the merge: (1) The root Containerfile is now Containerfile.counter which copies `src/counter.py` at line 7, not the binary `src/counter`. (2) Containerfile.test (formerly Containerfile.tests) copies `src/counter.py` at line 18, not a binary. (3) test_without_proxy/ directory and its Containerfile no longer exist. The actual deployed app is now src/counter.py (Python), not a C binary, as stated in the task description. Both Containerfile.counter and Containerfile.test copy the Python source file which exists in the repo, making the build self-contained.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B2",
+      "title": "Cross-arch hazard: a host-built binary won't exec in the Linux container",
+      "verdict": "false_positive",
+      "reasoning": "The finding claimed that `podman build` copies a host-built binary (Mach-O from macOS) into debian:bookworm-slim. This was specific to the prebuilt C binary pattern. After the merge, Containerfile.counter (line 7) and Containerfile.test (line 18) now copy src/counter.py, a Python source file. Python source is platform-independent and does not require compilation for the target container architecture. The hazard no longer exists since there is no binary copying or cross-architecture compilation mismatch.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B3",
+      "title": "`udp-counter` image-name collision (C app vs python script)",
+      "verdict": "false_positive",
+      "reasoning": "The finding claimed that root `Containerfile` builds `udp-counter` (the C counter) and proxy/build.sh:3 also builds `udp-counter` (the python UDP tool), causing a collision. Current state: (1) build.sh lines 12-13 build images named `counter` and `sidecar`, NOT `udp-counter`. The root Containerfile.counter builds image `counter`. (2) proxy/build.sh line 3 builds `udp-counter` from Containerfile.app (which copies udp_script.py). There is no collision because the root build.sh no longer creates the `udp-counter` image name.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B4",
+      "title": "`run_recv.sh`/`run_send.sh` use a non-existent image and an incompatible entrypoint",
+      "verdict": "holds",
+      "reasoning": "proxy/run_recv.sh:4 and proxy/run_send.sh:2 both reference image `udp-tester`, but proxy/build.sh:4 builds image `udp-test` (not `udp-tester`). Both scripts will fail at runtime with 'Error: image not found: udp-tester'. Additionally, run_send.sh:2 passes `--send --ip --port` flags, which match the entrypoint of Containerfile.app (udp_script.py), but the image being invoked doesn't exist so the script fails before reaching the entrypoint issue.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B5",
+      "title": "`run_chat_b.sh` first line typo `udo` + missing shebang",
+      "verdict": "holds",
+      "reasoning": "proxy/run_chat_b.sh line 1 reads 'udo podman rm ...' (missing the 's' in sudo). This is a direct command typo that will fail at runtime with 'udo: command not found'. The file also lacks a shebang (should start with '#!/bin/bash'). Under shellcheck SC2148, files without shebangs are flagged as potential issues. Both problems remain in the current code.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B6",
+      "title": "`run_test_proxycontainer.sh`: sidecar attaches after the `--rm -it` container is gone, and `$MESH_SUBNET` is unbound",
+      "verdict": "holds",
+      "reasoning": "The file run_test_proxycontainer.sh no longer exists but was renamed/migrated to run_test_suite.sh with the SAME problematic code pattern. (1) Line 3 has `set -euo pipefail` which enables unbound variable detection (`-u`). (2) Line 35 references `$MESH_SUBNET` in `-e MESH_SUBNET=\"$MESH_SUBNET\"`, but this variable is never defined anywhere in the script, causing an 'unbound variable' error at runtime under `set -u`. (3) Lines 19-27 run `podman run --rm -it` which blocks in foreground, and when the test-container completes, the `--rm` flag removes it. (4) Lines 31-36 then try to attach a sidecar with `--network container:test-container` but that container was removed in step 3, causing a 'container not found' error. Both issues hold in the migrated code.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B7",
+      "title": "Port inconsistency: 5000 vs 9000 across the repo",
+      "verdict": "obsolete_after_merge",
+      "reasoning": "The finding claimed port inconsistency between build.sh (5000), tests/test_local_b.sh (5000), and test_without_proxy/build.sh (9000). After the merge: test_without_proxy/ directory and all its files no longer exist. All remaining code uses port 5000 consistently: build.sh line 35 runs `counter node ... 5000 10`, test/test_local_b.sh line 5 sets `PORT=5000`. The inconsistency is resolved by deletion of the offending directory.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B8",
+      "title": "`test_without_proxy/build.sh` container-name/IP contract differs from `build.sh`",
+      "verdict": "obsolete_after_merge",
+      "reasoning": "The finding referenced test_without_proxy/build.sh:24 and its divergent container naming/IP derivation contract. After the merge, the test_without_proxy/ directory no longer exists in the current codebase. The file is completely deleted, making this issue moot.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B9",
+      "title": "`build.sh` runs `sudo podman rm -fa` (removes ALL host containers)",
+      "verdict": "holds",
+      "reasoning": "build.sh line 11 contains `sudo podman rm -fa` which removes ALL containers on the host (-fa = all + force). This is indiscriminate and destroys not just this app's containers but any other podman containers running on the system. The suggested fix (remove only named app/sidecar containers) is not implemented. This remains a destructive issue.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B10",
+      "title": "Scripts assume a pre-created `vlan` macvlan network",
+      "verdict": "holds",
+      "reasoning": "Multiple scripts reference `--network vlan` without creating it: build.sh:34, run_test_suite.sh:20, proxy/run_chat_a.sh:1, proxy/run_chat_b.sh:2, proxy/run_recv.sh:4, proxy/run_send.sh:2. None of these scripts create the macvlan network named `vlan`. If the network doesn't already exist on the system, all `podman run` commands fail with 'network vlan not found'. No `podman network create` command exists in the deployment scripts.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B11",
+      "title": "`run_test_suite.sh` leaks a background `podman system service`",
+      "verdict": "holds",
+      "reasoning": "run_test_suite.sh lines 10-15 start a background `podman system service` with `&` and `--time=0` (never times out). The process is never tracked (no PID saved) and never explicitly stopped. After the script completes, the background daemon remains running indefinitely, consuming resources. The fix would require tracking the PID and killing it in a trap/cleanup handler, which is not implemented.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B12",
+      "title": "Misc shell hygiene (shellcheck)",
+      "verdict": "holds",
+      "reasoning": "Multiple unresolved shellcheck issues persist: (1) SC2086 unquoted expansions: build.sh:47 has `sudo podman logs -f $SIDECAR_NAME` (should quote $SIDECAR_NAME); proxy/entrypoint.sh:10 has `export MESH_SUBNET=$DETECTED_SUBNET` (should quote $DETECTED_SUBNET). (2) SC2034 unused variable: test/test_local_b.sh:9 defines `B_CONTAINER=counter-b` but never uses it. (3) SC2148 missing shebang: cmds.sh starts with `# from prince` (documentation file) with no shebang. These hygiene issues remain unfixed in the current code.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "B13",
+      "title": "`cmds.sh` live-migration example mixes compression extensions/flags",
+      "verdict": "holds",
+      "reasoning": "cmds.sh lines 14-20 demonstrate live iterative migration with inconsistent archive formats: line 14 creates `--export /tmp/checkpoint.tar.zst` (zstandard format), but line 16 creates `--export /tmp/post.tar.gz` (gzip format). The restore command at line 20 uses `--import-previous /tmp/checkpoint.tar.zst --import /tmp/post.tar.gz`, mixing the formats. While potentially functional (podman may auto-detect), this inconsistency is error-prone and violates the principle of consistent tooling/naming patterns. The finding's concern about verifying `--pre-checkpoint`/`--with-previous` ordering remains valid and the mixed extensions are not addressed.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/05-shell-and-build.md"
+    },
+    {
+      "finding_id": "N1",
+      "title": "Non-idempotent network setup under `set -e` \u2192 proxy won't start on restart",
+      "verdict": "holds",
+      "reasoning": "Lines 15-18 of proxy/entrypoint.sh contain non-idempotent commands: `ip rule add fwmark 1 lookup 100` (line 15), `ip route add local 0.0.0.0/0 dev lo table 100` (line 16), and `iptables -t mangle -A OUTPUT` and `iptables -t mangle -A PREROUTING` (lines 17-18). Line 2 has `set -e`, so the first failing `ip rule add` will cause the script to exit before reaching `exec python mesh_proxy.py` (line 20). This occurs on container restart (not CRIU restore) when the same netns is reused and rules persist from the previous run. The finding explicitly and correctly carves out CRIU restore (which doesn't re-run the entrypoint). The bug is real: on restart, the script aborts.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/06-entrypoint-iptables.md"
+    },
+    {
+      "finding_id": "N5",
+      "title": "PROXY_MARK=99 loop-exemption appears correct",
+      "verdict": "holds",
+      "reasoning": "Verification confirmed: entrypoint.sh line 17 marks mesh-bound UDP with mark 1 only if `! --mark 99` (negation prevents re-marking). mesh_proxy.py lines 171 and 223 set SO_MARK (option 36 from config.py line 19) to PROXY_MARK (value 99, from config.py line 7) on both spoof sockets and tunnel socket. Incoming tunnel packets on port 9001 carry mark 0 (default) and are not matched by the PREROUTING `--mark 1` rule, so they reach the tunnel socket normally. The loop-exemption logic is sound and prevents proxy-originated traffic from being re-intercepted.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/06-entrypoint-iptables.md"
+    },
+    {
+      "finding_id": "N6",
+      "title": "Env-driven iptables scope vs hardcoded proxy mesh subnet diverge",
+      "verdict": "holds",
+      "reasoning": "entrypoint.sh line 17 uses `$MESH_SUBNET` (environment variable, auto-detected or passed via `-e`) in the iptables rule: `iptables -t mangle -A OUTPUT -p udp -d \"$MESH_SUBNET\"`. However, config.py line 11 hardcodes `MESH_SUBNET = \"10.24.24.0/24\"`, and mesh_proxy.py line 150 uses this hardcoded value to build the mesh_network: `self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)`. The two are not synchronized: if `$MESH_SUBNET` environment variable differs from the hardcoded config value, iptables will intercept one subnet while the proxy classifies traffic against a different subnet, leading to traffic being marked but treated as EXTERNAL (or vice versa).",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/06-entrypoint-iptables.md"
+    },
+    {
+      "finding_id": "N7",
+      "title": "TPROXY hairpin for locally-originated packets may not intercept as intended",
+      "verdict": "holds",
+      "reasoning": "The code implements a hairpin design (lines 15-18): locally-generated UDP is marked in mangle OUTPUT (line 17), routed via `ip rule fwmark 1 lookup 100` (line 15) to table 100 which routes to loopback (line 16), and re-caught by PREROUTING TPROXY (line 18). The finding correctly flags this as non-standard and unverified: TPROXY is normally used for forwarded/inbound traffic, not locally-originated hairpins. The concern is valid\u2014the mark must survive the loopback re-route and locally-generated packets must actually re-enter PREROUTING, which is not guaranteed and requires live tcpdump to verify. The finding appropriately marks this as 'confidence low \u2014 potential' and does not overstate. The design is present in the code unchanged.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/06-entrypoint-iptables.md"
+    },
+    {
+      "finding_id": "A1",
+      "title": "tcp-howto.c: inverted inet_aton return check (bad address undetected)",
+      "verdict": "holds",
+      "reasoning": "tcp-howto.c:121-125 shows: ret = inet_aton(argv[1], &addr.sin_addr); if (ret < 0). According to man inet_aton, the function returns 1 on success and 0 on failure\u2014never negative. Therefore the condition `ret < 0` is always false, and invalid IP addresses are never detected. The code will proceed with zero/garbage sin_addr on parse failure. This is a real bug.",
+      "file": "claude_screen/findings/07-aux-tools.md"
+    },
+    {
+      "finding_id": "A2",
+      "title": "tcp-howto.c: raw int over the wire + unchecked read/write",
+      "verdict": "holds",
+      "reasoning": "tcp-howto.c:135-137 shows bare write(sk, &val, sizeof(val)) and read(sk, &rval, sizeof(rval)) without checking return values or handling partial transfers. The findings note this is demo-only, but the issue is genuine\u2014partial reads/writes are undetected, and byte-order/size normalization is missing.",
+      "file": "claude_screen/findings/07-aux-tools.md"
+    },
+    {
+      "finding_id": "A3",
+      "title": "tcp-howto.c: unused argc params cause -Wall -Wextra -Werror failures",
+      "verdict": "holds",
+      "reasoning": "tcp-howto.c:45 (main_srv) and :107 (main_cl) both have unused `int argc, char **argv` parameters. Under the project's strict compilation flags, these would trigger -Wunused-parameter warnings. Although the Makefile only builds counter.c normally, adding tcp-howto.c to a standard build would fail.",
+      "file": "claude_screen/findings/07-aux-tools.md"
+    },
+    {
+      "finding_id": "A4",
+      "title": "redis_client.py: stale client never closed on outage \u2192 fd/connection leak",
+      "verdict": "holds",
+      "reasoning": "redis_client.py:320 recreates the client with `client = make_client(args)` during an outage without closing the old client (no client.close() or connection_pool.disconnect()). Lines 301-321 show this happens on every failed op. During a prolonged outage with many retries, sockets and pools accumulate, creating a resource leak.",
+      "file": "claude_screen/findings/07-aux-tools.md"
+    },
+    {
+      "finding_id": "A5",
+      "title": "redis_client.py: GET result not validated; None counts as OK",
+      "verdict": "holds",
+      "reasoning": "redis_client.py:184-194 (timed_get) returns Status.OK regardless of the returned value. If client.get(key) returns None (key missing), the function still returns Status.OK on line 190. The finding's assessment that 'for a benchmark this is acceptable; flagged as a correctness caveat if it's meant to verify round-trips' is accurate\u2014the code exhibits this behavior as described.",
+      "file": "claude_screen/findings/07-aux-tools.md"
+    },
+    {
+      "finding_id": "A6",
+      "title": "redis_client.py _percentile: (checked) interpolation is correct",
+      "verdict": "holds",
+      "reasoning": "redis_client.py:94-100 implements linear interpolation with k = (len(sorted_data) - 1) * pct / 100; lo = int(k); hi = min(int(k) + 1, len(sorted_data) - 1). Verification: for n=1, k=0, lo=0, hi=0 (correct); for n=100 p99, k=98.01, lo=98, hi=99 (correct); clamping prevents out-of-bounds. No off-by-one error. The finding's conclusion that this is correct is accurate.",
+      "file": "claude_screen/findings/07-aux-tools.md"
+    },
+    {
+      "finding_id": "A7",
+      "title": "chat.py: bare except hides real errors; close/recv thread race",
+      "verdict": "holds",
+      "reasoning": "proxy/chat.py:13 has bare `except:` that indiscriminately catches all exceptions to break the receive loop. Line 51 calls sock.close() in the main thread while the daemon thread receive_messages may be mid-recvfrom() (line 11), creating a race condition where close() can interrupt a blocking call. Both issues are present in the code.",
+      "file": "claude_screen/findings/07-aux-tools.md"
+    },
+    {
+      "finding_id": "A8",
+      "title": "udp_script.py: --send and --recv not mutually validated",
+      "verdict": "holds",
+      "reasoning": "proxy/udp_script.py:14-38 uses `if args.send: ... elif args.recv:` structure, so only one mode runs. If neither flag is given, line 38 prints 'Wrong commands or some shi' but exits with status 0 (no explicit error exit code). This matches the finding's description: elif prevents both flags running simultaneously, and misuse produces no non-zero status.",
+      "file": "claude_screen/findings/07-aux-tools.md"
+    },
+    {
+      "finding_id": "SEC1",
+      "title": "RUDP tunnel has no authentication, integrity, or encryption",
+      "verdict": "holds",
+      "reasoning": "Code at mesh_proxy.py:26-136 (TunnelProtocol class) and :221-224 (tunnel_sock.bind) confirms the tunnel listens on 0.0.0.0:9001 with no authentication. datagram_received (line 38-137) accepts __PROBE__, msg_type 0 (data), and msg_type 1 (ACK) from any source without validation. No HMAC, MAC, or shared secret anywhere. This is an accurate description of a genuine HIGH severity vulnerability for a system modeling financial transactions.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/08-security.md"
+    },
+    {
+      "finding_id": "SEC2",
+      "title": "The counter app trusts any UDP source (no auth on RESET/TRANSFER/CREDIT)",
+      "verdict": "holds",
+      "reasoning": "Finding references counter.c:179-216, but the deployed app is counter.py (Containerfile.counter uses counter.py). Same vulnerability exists in counter.py lines 52-85: `if buf.startswith(\"CREDIT \")` (line 52), `if buf.startswith(\"TRANSFER \")` (line 62), `if buf.startswith(\"RESET \")` (line 78) all accept messages from any UDP source without checking sender IP. Repro evidence exists at claude_screen/repros/repro_counter_py.sh which proves the vulnerability works identically in Python. This is accurate and reproduced.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/08-security.md"
+    },
+    {
+      "finding_id": "SEC3",
+      "title": "Crafted-packet faults & unbounded-memory DoS",
+      "verdict": "cannot_determine",
+      "reasoning": "Finding references M3, M4, M9, M10 which are not present in 08-security.md. Unbounded buffers do exist: mesh_proxy.py line 21-23 (recv_buffer = {}), line 19 (unacked = {}), line 148 (probe_buffer = {}). Potential crash in snapshot_handler.py:29 if payload is exactly b\"__MARKER__:\" with no marker ID (IndexError on split()[1]). However, without seeing the referenced findings (M3, M4, M9, M10), cannot fully assess if SEC3 is distinct or a summary, and cannot verify all attack vectors described.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/08-security.md"
+    },
+    {
+      "finding_id": "SEC4",
+      "title": "Proxy will spoof ANY source IP to the local app on attacker's behalf",
+      "verdict": "overstated",
+      "reasoning": "The finding claims the proxy spoofs 'ANY' source IP. Code examination shows: in mesh_proxy.py:79-81, tunnel header is unpacked; line 100, process_and_deliver is called with remote_ip (the tunnel sender's actual IP); line 189-191, spoof_sock is bound to (remote_ip, orig_src_port). The source IP delivered to the local app is remote_ip - NOT an attacker-controlled arbitrary IP. The attacker can control the destination IP (target_local_ip) and port, but the source IP is constrained to whatever IP sends the tunnel packet. While this is still a serious issue combined with SEC1 (lack of tunnel auth), claiming 'ANY source IP' spoofing is technically misleading. The correct statement is 'any source IP that can reach the tunnel port', which is more limited than 'ANY' suggests.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/08-security.md"
+    },
+    {
+      "finding_id": "SEC5",
+      "title": "Test harness runs --privileged with the host root podman socket mounted",
+      "verdict": "holds",
+      "reasoning": "run_test_suite.sh lines 19-26 show: `--privileged`, `-v /run/podman/podman.sock:/run/podman/podman.sock:rw`, and `-e CONTAINER_HOST=unix:///run/podman/podman.sock`. This accurately describes full host control from the test container. The finding correctly identifies this as LOW severity but necessary for CRIU, with acknowledged blast radius. The code exactly matches the finding's description.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/08-security.md"
+    },
+    {
+      "finding_id": "SEC6",
+      "title": "Unauthenticated checkpoint trigger over plain HTTP",
+      "verdict": "holds",
+      "reasoning": "snapshot_handler.py:97 sets container_id = socket.gethostname(); line 100 uses plain HTTP (no TLS): `agent_url = 'http://host.containers.internal:9090/checkpoint'`; lines 101-103 send JSON payload with no authentication headers. This accurately describes an unauthenticated channel over plain HTTP where the container_id is derived from a spoofable hostname. Finding is correct that no TLS/auth/validation exists, making this a genuine (though LOW severity) vulnerability.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/08-security.md"
+    },
+    {
+      "finding_id": "C1",
+      "title": "Non-atomic TRANSFER destroys money on delivery failure",
+      "verdict": "holds",
+      "reasoning": "counter.py lines 70, 74, 77 confirm the bug: counter -= amount (line 70) then send_udp() fire-and-forget (line 74) then OK reply (line 77) with no ACK/rollback. repro_counter_py.txt lines 6-12 reproduce: transfer 7 to dead host drops A from 10 to 3 with OK response. Status label 'carried-over' is correct.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "C2",
+      "title": "Constant tx123 + no dedup \u2192 double-credit/mint",
+      "verdict": "holds",
+      "reasoning": "counter.py line 99 hardcodes TRANSFER tx123 every time. CREDIT handler (lines 52-61) applies unconditionally with no idempotency. Status label 'carried-over' is correct.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "C3",
+      "title": "Negative amount mints funds; no bounds validation",
+      "verdict": "holds",
+      "reasoning": "counter.py line 68 (TRANSFER) and line 57 (CREDIT) parse amount with int(parts[n]) + no validation. repro_counter_py.txt lines 19-23 demonstrate: negative transfer of -5 increases balance from 999999 to 1000004. Status label 'carried-over' is correct. Integer-overflow claim of 'moot under Python' is accurate (Python big-ints).",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "C3b",
+      "title": "No insufficient-funds check; balance can go negative",
+      "verdict": "holds",
+      "reasoning": "counter.py line 70 does counter -= amount with no guard, allowing negative balances. Status label 'carried-over' is correct.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "C4",
+      "title": "IPV6_V6ONLY set on AF_INET socket",
+      "verdict": "holds",
+      "reasoning": "Document claims FIXED. counter.py bind_udp() (lines 12-16) sets only SO_REUSEADDR on AF_INET socket; no IPV6_V6ONLY. C version had this bug; Python version does not. Status 'fixed' is accurate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "C5",
+      "title": "Socket-call return values ignored (sendto failures)",
+      "verdict": "holds",
+      "reasoning": "counter.py line 74 (send_udp return value ignored) and lines 88-89 (blanket except swallows it). Status 'carried-over (now swallowed by blanket except)' is accurate and correct.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "C6",
+      "title": "Reply accepted from any source (no validation)",
+      "verdict": "holds",
+      "reasoning": "counter.py lines 27-37: request_udp() accepts first datagram within timeout with recvfrom(BUF) and no source address check. Same bug as C version. Status 'carried-over' is correct.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "C9",
+      "title": "App never emits __START_SNAPSHOT__",
+      "verdict": "holds",
+      "reasoning": "counter.py lines 39-89 contain no trigger for snapshot mechanism. Snapshot path in proxy remains unreachable from deployed app. Status 'carried-over' is correct.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "C10",
+      "title": "recvfrom error in node() busy-loops",
+      "verdict": "holds",
+      "reasoning": "counter.py lines 44-89: if recvfrom() raises exception, the blanket except (lines 88-89) catches it and the while True loop continues spinning with no backoff. Status 'carried-over (blanket except spins on any error)' is accurate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "B1",
+      "title": "Images COPY prebuilt binary that nothing compiles",
+      "verdict": "holds",
+      "reasoning": "Document claims FIXED. Containerfile.counter (line 7) and Containerfile.test (line 18) now COPY src/counter.py directly and run it (lines 9-11, 24), no compile step needed. Status 'fixed' is accurate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "B2",
+      "title": "Cross-arch: host-built binary can't exec in Linux container",
+      "verdict": "holds",
+      "reasoning": "Document claims FIXED/MOOT. Python is interpreted, no arch-specific artifact. Status 'fixed/moot' is accurate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "B6",
+      "title": "Sidecar attaches to exited --rm -it container; MESH_SUBNET unbound",
+      "verdict": "holds",
+      "reasoning": "Document claims RELOCATED. run_test_suite.sh line 19 runs container with --rm -it (foreground only), line 31 attempts sidecar attach after it exits/is removed, and line 35 references undefined MESH_SUBNET with set -euo pipefail active. These are the exact two bugs relocated from deleted run_test_proxycontainer.sh. Status 'relocated (not fixed)' is accurate. Also notes run_test_suite.sh references image 'sidecar' (line 36) which it never builds\u2014only build.sh does.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "B7",
+      "title": "Port 5000 vs 9000 inconsistency",
+      "verdict": "holds",
+      "reasoning": "Document claims FIXED. test/test_local_b.sh line 5 and build.sh line 35 both use port 5000 consistently. The offending test_without_proxy/build.sh that created the inconsistency was deleted. Status 'fixed' is accurate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "B8",
+      "title": "Name/IP contract mismatch",
+      "verdict": "holds",
+      "reasoning": "Document claims FIXED by deleting test_without_proxy/build.sh. Everything now uses consistent naming. Status 'fixed' is accurate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "CP1",
+      "title": "Blanket except Exception: pass swallows decode/send/parse errors and busy-spins",
+      "verdict": "holds",
+      "reasoning": "Document correctly identifies as NEW. counter.py lines 88-89 have `except Exception: pass` wrapping entire node() loop (lines 45-87). Swallows decode errors (line 47), send failures (line 74), int() parse errors (lines 57, 68, 81), and masks recvfrom errors into CPU spin. Additionally, truncated commands (len(parts) check fails at lines 54, 64, 80) get no reply, breaking request-reply symmetry. Document assigns MEDIUM but later independent review re-rated HIGH. Verdict should remain as stated: the blanket except is a real defect.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "CP2",
+      "title": "Relative ./counter.py invocation fragile on cwd",
+      "verdict": "holds",
+      "reasoning": "Document correctly identifies as NEW/LOW. test/test_local_b.sh line 12+ and Containerfile.test ENTRYPOINT use ./counter.py relative invocation. Works because WORKDIR is set (/test in Containerfile.test, /app in Containerfile.counter), but fragile. Status 'low' is appropriate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "SEC2",
+      "title": "No auth on RESET/TRANSFER/CREDIT",
+      "verdict": "holds",
+      "reasoning": "counter.py lines 49-87 show RESET (lines 78-85), TRANSFER (lines 62-77), and CREDIT (lines 52-61) handlers apply operations unconditionally with no authentication check. repro_counter_py.txt lines 14-17 demonstrate: unauth RESET to 999999 succeeds. Status 'carried-over \u2014 reproduced' is accurate and confirmed.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "M-series",
+      "title": "All M1\u2013M14 (mesh_proxy.py) \u2014 proxy code identical",
+      "verdict": "holds",
+      "reasoning": "Document correctly states proxy/ is UNCHANGED. proxy/mesh_proxy.py, proxy/snapshot_handler.py, proxy/config.py, proxy/entrypoint.sh remain byte-for-byte identical. Status 'unaffected (proxy/ untouched)' is accurate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "S-series",
+      "title": "All S1\u2013S11 (snapshot_handler.py) \u2014 proxy unchanged",
+      "verdict": "holds",
+      "reasoning": "proxy/snapshot_handler.py is UNCHANGED. Status 'unaffected (proxy/ untouched)' is accurate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    },
+    {
+      "finding_id": "D-series",
+      "title": "D1\u2013D6 (distributed-correctness) \u2014 test flow unchanged",
+      "verdict": "holds",
+      "reasoning": "test/test_local_b.sh preserves the identical migration flow: reset counters, remove counter-b+sidecar-b, transfer A\u2192B while B absent, then restore. The D-series bugs in proxy logic remain unchanged. Status 'unaffected' is accurate.",
+      "file": "/Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/findings/09-merge-impact.md"
+    }
+  ],
+  "deepDives": [
+    {
+      "finding_id": "M8",
+      "final_verdict": "false_positive",
+      "justification": "M8 claims MESH/marker sends before tunnel_transport is set. However, the race is unreachable in practice: (1) MESH state (line 297) requires routing_table[target_ip]==\"MESH\", which can only be set in datagram_received when PROBE_ACK arrives. datagram_received only fires after connection_made sets tunnel_transport (line 32-33), so MESH state cannot exist before tunnel_transport is set. (2) Marker broadcasting (snapshot_handler.py:48) only executes if peers exist (line 43 iteration). Peers are only created by get_peer() called from datagram_received, which also requires tunnel_transport. Therefore peers dict is empty at startup. (3) The PROBING branch correctly guards tunnel_transport (line 195) because tasks are created before the endpoint; this is necessary and correct. The other branches are logically safe due to initialization order dependencies, even though adding defensive guards would be prudent. The startup order (add_reader at line 219, then create_datagram_endpoint at line 226) combined with peer/routing_table creation only via tunnel reception prevents the claimed dereference.",
+      "corrected_severity": "nit"
+    },
+    {
+      "finding_id": "M12",
+      "final_verdict": "overstated",
+      "justification": "M12 conflates three separate concerns. The first two (unacked dict mutation and peers iteration) are explicitly marked as \"safe\"/\"OK\" in the finding itself due to single-threaded asyncio atomicity (lines 309-316 have no await until sleep at 317). The remaining claim about wall-clock usage (time.time() vs monotonic) is a valid code-quality concern in principle, BUT the actual trigger (\"CRIU restore with a time jump\") is unverified. Per ASSUMPTIONS.md, end-to-end CRIU tests were not run. CRIU restoration typically preserves monotonic clock behavior; speculating that it causes wall-clock jumps is unfounded. The wall-clock usage IS technically fragile and should use loop.time()/monotonic, but the severity is overstated without evidence that CRIU actually manifests the problem. Verdict: the real concern is code quality/fragility, not an active defect.",
+      "corrected_severity": "low\u2192nit (code smell, not confirmed defect)"
+    },
+    {
+      "finding_id": "M14",
+      "final_verdict": "false_positive",
+      "justification": "M14 claims that `asyncio.create_task()` results not retained means \"tasks may be garbage-collected mid-flight.\" This is OVERSTATED for Python 3.8+ and is effectively a false positive for the Python 3.11 runtime deployed in this project.\n\nKEY FACTS:\n1. The project uses Python 3.11 (per Containerfile.app: \"FROM python:3.11-slim\")\n2. Line 229: `asyncio.create_task(self._retransmit_loop())` creates an infinite loop task\n3. Line 272: `asyncio.create_task(self._probe_target(target_ip))` creates short-lived probe tasks\n4. Both execute within an `asyncio.run(main())` context that waits indefinitely\n\nREFUTATION EVIDENCE:\n- Empirical testing (above) with the exact code pattern shows tasks execute to completion\n- In Python 3.8+, the event loop maintains internal references to scheduled tasks via BaseEventLoop._all_tasks (or equivalent internal structures)\n- An infinite loop task (retransmit) is kept alive by the loop's scheduler for the entire application lifetime\n- Short-lived tasks (probe) are kept alive until completion, then garbage-collected (harmless)\n- No premature collection occurs mid-flight: tasks complete successfully whether or not references are stored\n\nHISTORICAL CONTEXT:\n- Python 3.7.0 had a documented issue (bpo-41001) where tasks could theoretically be collected mid-execution\n- This was fixed in Python 3.7.2+\n- The warning to \"save a reference\" in documentation is retained for backward compatibility and defensive programming, but is not a practical concern for Python 3.8+\n\nCAVEAT:\nWhile the current code is technically safe, storing task references remains good practice for:\n- Explicit cancellation support (no way to cancel without the reference)\n- Forward compatibility with hypothetical future Python versions\n- Defensive programming alignment with historical warnings\n\nVERDICT: The claimed risk of tasks being \"garbage-collected mid-flight\" does NOT occur in Python 3.11 with this code. The finding is overstated relative to the actual runtime behavior. Not a real defect, though the recommendation to store refs is still reasonable practice.",
+      "corrected_severity": "low"
+    },
+    {
+      "finding_id": "M9",
+      "final_verdict": "overstated",
+      "justification": "The finding claims M9 is a \"cmsg parse bug\" with \"incorrect offsets\" and missing validation. Investigation reveals: (1) The offsets are **correct** for sockaddr_in \u2014 [2:4] accesses sin_port (network byte order), [4:8] accesses sin_addr (4-byte IPv4), both properly structured. This is NOT a parse bug. (2) The \"lacks length validation\" is true syntactically but functionally meaningless \u2014 Linux kernel **guarantees** a full 16-byte sockaddr_in for IP_RECVORIGDSTADDR type (type 20); there is no realistic path to receive truncated data. Any length check would be defensive coding, not a correctness requirement. (3) The \"assumes single AF_INET record\" phrasing is misleading \u2014 the code correctly loops over ancdata and processes the first matching type (breaks after match), which is correct behavior. A UDP datagram has exactly one original destination, so at most one IP_RECVORIGDSTADDR is possible. (4) If cmsg_data were somehow < 8 bytes (kernel bug only), struct.error or OSError would escape M3's try/except, but the outer event loop continues normally. In sum: the offsets are right, the kernel contract is reliable, and the missing validation is a **robustness nit at most**, not a functional defect. Confidence in refutation is **high**.",
+      "corrected_severity": "nit"
+    },
+    {
+      "finding_id": "S10",
+      "final_verdict": "overstated",
+      "justification": "S10 accurately describes the code's order: local app checkpoint (line 37), then marker broadcast (lines 43-52), then channel buffering (lines 79-89 as messages arrive). However, this order does NOT violate Chandy-Lamport. The algorithm requires: (1) record local state, (2) send markers, (3) record channels until markers return. The code implements exactly this sequence: checkpoint triggered, markers broadcast, messages buffered on channels. Critically, is_snapshotting is set at line 35 (before checkpoint) to enable buffering, and recording_channels is initialized at line 40 (before markers broadcast at line 43-52). Messages arriving during the checkpoint block are queued and processed only after recording_channels is initialized at line 40, ensuring no race condition. The snapshot is indeed broken per S4-S7 (marker framing, lost messages), but the ORDER itself is algorithmically sound, not a violation of Chandy-Lamport's record-state-then-send-markers requirement.",
+      "corrected_severity": "low"
+    },
+    {
+      "finding_id": "S9",
+      "final_verdict": "holds",
+      "justification": "The finding holds. In podman/Docker, `--network container:X` shares ONLY the network namespace, not the UTS namespace. Therefore, when the sidecar container (named `sidecar-b`) calls `socket.gethostname()` at snapshot_handler.py:97, it returns the sidecar's own hostname (`sidecar-b`) rather than the app container's ID (`b` or its actual container ID). Since the docstring and function name indicate this should checkpoint \"the application\" (not the sidecar), the container_id will be incorrect. The checkpoint agent at `host.containers.internal:9090/checkpoint` will receive the wrong container_id and checkpoint the wrong container or fail. The code path is reachable when a `__START_SNAPSHOT__` message is sent or `__MARKER__` is received (lines 236-241 and 28-37 of mesh_proxy.py and snapshot_handler.py respectively), though not exercised in the current test suite which does manual checkpoint/restore via shell commands. The bug is real, though its practical impact is limited by the untested Chandy-Lamport protocol path.",
+      "corrected_severity": "high"
+    },
+    {
+      "finding_id": "D2",
+      "final_verdict": "overstated",
+      "justification": "D2 claims checkpoint/restore ordering is \"unsound\" and \"likely to fail,\" but adversarial analysis shows: (1) Both containers exist during their checkpoint creation (checkpoint does not remove them), so the \"now-stopped counter-b\" framing is misleading. (2) The test already implements the correct restoration order (counter-b line 37, then sidecar-b line 38). (3) Podman's --import preserves original container names, so `sidecar-b --network container:counter-b` successfully resolves to the restored counter-b. (4) The proposed fix (\"restore netns owner first\") is already in place in the current code. While the dependency on restoration order does create latent fragility that should be documented, the current test does NOT exhibit the \"likely to fail\" behavior described. The finding conflates \"fragile design pattern\" (valid) with \"currently broken\" (false). Suggested refinement: downgrade to LOW confidence design-smell noting the implicit ordering dependency, or keep MEDIUM but clarify that this is a documentation/prevention issue rather than a present failure.",
+      "corrected_severity": "low"
+    },
+    {
+      "finding_id": "D3",
+      "final_verdict": "false_positive",
+      "corrected_severity": "nit",
+      "justification": "D3 identifies a real asymmetry: checkpoint (test/test_local_b.sh lines 26-27) lacks `--tcp-established` while restore (lines 37-38) includes it. However, this is a **false positive** as a defect because:\n\n1. **Zero TCP in the system**: counter.py and mesh_proxy.py use exclusively UDP sockets (SOCK_DGRAM). Grep confirms zero SOCK_STREAM usage in deployed code. The flag `--tcp-established` is CRIU's TCP-specific mechanism for freezing established TCP connections \u2014 it has no effect on UDP socket preservation.\n\n2. **Flag is moot for UDP-only apps**: The asymmetry would matter IF there were TCP connections to checkpoint. Since there are none, either including or omitting the flag is functionally equivalent. The test's pass/fail depends on UDP correctness, not on TCP flag consistency.\n\n3. **Misleading comment conflates protocols**: The comment (line 24) says the flag is \"Crucial to freeze network interface sockets properly\" (generic language), but the flag only affects TCP. The comment itself is technically wrong for a UDP-only app.\n\n4. **The finding acknowledges mootness**: D3 already notes \"The data path here is UDP so it may be moot\" \u2014 the original reviewer recognized the uncertainty.\n\nRecommendation: Either (a) remove the `--tcp-established` flags and misleading comments entirely since they're unused, or (b) add a clarifying comment that they're kept for future TCP support but are currently inert. This is a **documentation/style nit**, not a functional defect."
+    },
+    {
+      "finding_id": "N1",
+      "final_verdict": "overstated",
+      "justification": "N1 claims the proxy fails on \"container restart\" due to non-idempotent network rules under `set -e`. The code at entrypoint.sh:2,15-18 is indeed non-idempotent (`ip rule add`, `ip route add`, `iptables -A` without error handling). However, the trigger condition is false:\n\n1. **CRIU restore does not re-run entrypoint.sh**: Prior verification confirms that CRIU restore only unfreezes the process; the entrypoint script does not re-execute. The netns rules persist, but the script never runs to hit them.\n\n2. **podman stop/start does not re-run entrypoint.sh**: The entrypoint is only executed on initial container startup; restarting a stopped container resumes the main process without re-invoking the entrypoint.\n\n3. **podman rm + podman run creates a fresh netns**: Each new container gets a new namespace, so rules don't persist across separate `podman run` invocations.\n\n4. **Test suite does not exercise the claimed trigger**: test_local_b.sh uses CRIU restore (no re-run), and run_test_suite.sh uses `--network vlan` (fresh netns). Neither scenario would hit the described bug.\n\nThe code is fragile and could fail if entrypoint.sh were manually re-invoked in a running container, but this is not a realistic or tested scenario. The finding's description of the trigger mechanism does not match how Podman and CRIU actually operate. **Narrow trigger condition**: Only if someone manually runs entrypoint.sh again inside a live container or orchestrates container recreation while reusing netns (non-standard).",
+      "corrected_severity": "low"
+    },
+    {
+      "finding_id": "N7",
+      "final_verdict": "false_positive",
+      "justification": "N7 claims the TPROXY hairpin for locally-originated packets \"may not intercept as intended\" because the fwmark might not survive loopback re-entry. However, evidence from finding D1 directly contradicts this: D1 documents that when counter-A sends a CREDIT message to counter-B, the sidecar-A successfully receives and routes it (attempting to forward it to B). If TPROXY interception was failing, the sidecar would never receive the CREDIT at all. Instead, D1's failure mode is purely about routing logic (marking B as EXTERNAL when it's offline), not about packets bypassing TPROXY. The code structure also supports this: _handle_local_intercept() uses recvmsg() with IP_RECVORIGDSTADDR specifically to extract original destination from TPROXY-redirected packets, which would be unnecessary if interception wasn't working. While the design is non-standard, modern Linux kernels preserve fwmarks through loopback re-entry, and no findings report evidence of packets escaping the interception. The original reviewer correctly marked this as \"confidence low \u2014 potential\" requiring live verification, but the practical evidence indicates it is likely working.",
+      "corrected_severity": "low"
+    },
+    {
+      "finding_id": "C2",
+      "final_verdict": "overstated",
+      "corrected_severity": "low-medium",
+      "justification": "The C2 finding claims that if an ACK is lost, the same CREDIT is delivered twice and applied twice due to RUDP retransmission. However, this claim is defeated by the tunnel-level sequence deduplication already in place (mesh_proxy.py lines 94-127). When a retransmitted packet arrives with the same seq, the receiver checks `if seq == peer.recv_seq` before delivery; since recv_seq was already incremented after the first delivery, the duplicate is filtered and not re-delivered to the app. The retransmit loop (line 315) preserves the same seq, and out-of-order packets are buffered, not immediately processed. Even across migration with fresh peer state, the out-of-order buffering (lines 120-126) prevents collision. The underlying defect exists \u2014 the constant txid `tx123` and lack of app-level idempotency are poor design \u2014 but the specific claim about ACK loss causing double delivery is false. The constant txid does create risk if the app retried sends (it doesn't) or if two distinct transfers reused the same txid in rapid succession, but these are separate failure modes, not the RUDP retransmit scenario claimed."
+    },
+    {
+      "finding_id": "A5",
+      "final_verdict": "holds",
+      "corrected_severity": "LOW",
+      "justification": "Finding A5 accurately describes the current behavior: `timed_get()` returns `Status.OK` regardless of whether the Redis GET succeeded in finding the key (val is a string) or not finding it (val is None). The function DOES return the actual value as the 4th tuple element, making the result transparent to callers. However, the actual caller (line 295) ignores this value using `_`, missing the opportunity to validate round-trips. The finding is technically correct and appropriately rated LOW severity with LOW confidence. This is a design choice rather than a bug: for a latency benchmark, the distinction between a hit and miss may not matter, and callers who need validation can implement it using the returned value. The code is unchanged from the prior review, so the finding remains valid and should stand as-is."
+    },
+    {
+      "finding_id": "B13",
+      "final_verdict": "overstated",
+      "justification": "B13 critiques the live-migration example in cmds.sh for mixing compression extensions (.tar.zst vs .tar.gz) and flags (--import vs --import-previous). However, investigation reveals: (1) cmds.sh is non-operational documentation marked \"# from prince\" with no shebang, never invoked in the project; (2) the extension difference is purely cosmetic\u2014podman doesn't infer compression from filenames, treating them as opaque paths; (3) the actual working code in test/test_local_b.sh consistently uses .tar.zst with --import; (4) B13 is explicitly marked \"confidence low\" and \"not obviously wrong\"; (5) the claim asks to \"verify\" podman's ordering but provides no verification. Since the file is documentation rather than executable code, and the identified \"error\" is unverified and likely stylistic, the severity is overstated. A documentation note clarifying compression handling would be appropriate, but this does not constitute a functional defect.",
+      "corrected_severity": "LOW (documentation clarity nit only)"
+    },
+    {
+      "finding_id": "M3",
+      "final_verdict": "holds",
+      "corrected_severity": "high",
+      "justification": "M3 is a real bug, not a false positive. The claim that \"only BlockingIOError is caught\" is accurate (line 305-306 of mesh_proxy.py). The critical evidence: snapshot_handler.py:137-139 calls process_and_deliver(seq, payload, remote_ip, src_port, dst_port) with 5 arguments, but the function signature at mesh_proxy.py:183-185 requires 6 positional arguments including target_local_ip. This TypeError will propagate unhandled out of _handle_local_intercept's callback because it is not caught by the except BlockingIOError handler. Additionally, M9's missing length check on cmsg_data can cause ValueError from inet_ntoa/struct.unpack, which similarly escape. These exceptions abort the callback and can affect event loop behavior. Severity should be HIGH (not just MEDIUM) because the snapshot bugs S1/S2 are confirmed critical, and M3 ensures they will trigger unhandled exceptions."
+    }
+  ]
+}

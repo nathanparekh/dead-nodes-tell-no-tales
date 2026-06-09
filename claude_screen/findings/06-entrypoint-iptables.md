@@ -2,7 +2,10 @@
 
 ---
 
-## N1 — Non-idempotent network setup under `set -e` → proxy won't start on restart  [MEDIUM, confidence high]
+## N1 — Non-idempotent network setup under `set -e` → proxy won't start on restart  [MEDIUM → LOW, see 10-correctness-audit.md]
+> **AUDIT: overstated.** Real under `set -e`, but no tested path hits it — CRIU restore and
+> `podman start` don't re-run the entrypoint, and `rm`+`run` gives a fresh netns. Triggers
+> only on a non-standard manual re-invocation over a persistent netns. Downgrade to low.
 **Where:** `entrypoint.sh:2` (`set -e`), `:15-18` (`ip rule add`, `ip route add local`,
 two `iptables -A` appends).
 **Why it's a bug:** On a container restart (same netns reused) or any second run, `ip rule
@@ -44,7 +47,10 @@ Cross-ref **M13**: `entrypoint.sh` configures the TPROXY iptables rules from
 **hardcoded** `config.MESH_SUBNET`. The two can disagree, so the kernel intercepts traffic
 the proxy then treats as `EXTERNAL` (or the reverse). Fix in `config.py`: read the env var.
 
-## N7 — TPROXY hairpin for locally-originated packets may not intercept as intended  [MEDIUM, confidence low — potential]
+## N7 — TPROXY hairpin for locally-originated packets may not intercept as intended  [→ FALSE POSITIVE / unverified, see 10-correctness-audit.md]
+> **AUDIT: no evidence it fails.** Nothing in the code proves the hairpin doesn't work, and
+> the rest of the analysis assumes interception *does* fire. Keep as a "verify on a real node
+> with tcpdump" item, not a confirmed bug.
 **Where:** `entrypoint.sh:15-18`. The design marks locally-generated UDP in `mangle OUTPUT`
 (mark 1), routes mark-1 via `ip rule fwmark 1 table 100` (local route on `lo`), expecting it
 to re-enter `PREROUTING` where the `-m mark --mark 1` TPROXY rule fires.

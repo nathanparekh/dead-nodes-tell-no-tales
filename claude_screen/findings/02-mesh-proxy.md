@@ -82,7 +82,11 @@ a hard error, not a silent degradation.
 descriptor leaks on every bind failure. (Confirmed by the workflow's netcfg pass.) Close
 the original before reassigning.
 
-## M8 — Startup race: MESH/marker sends before `tunnel_transport` is set  [LOW, confidence medium]
+## M8 — Startup race: MESH/marker sends before `tunnel_transport` is set  [~~LOW~~ → FALSE POSITIVE, see 10-correctness-audit.md]
+> **AUDIT: not a real bug.** The MESH branch needs a prior PROBE_ACK and the marker
+> broadcast needs existing peers; both require `connection_made` (which sets
+> `tunnel_transport`) to have already run, and `_probe_target` is guarded. The null-deref is
+> unreachable at startup. Retained for the record only.
 **Where:** `start()` registers the local reader (`:219`) **before** the tunnel datagram
 endpoint is created (`:226`); `tunnel_transport` is assigned in `connection_made`.
 **Why it's a bug:** A packet intercepted in that window that hits the MESH branch
@@ -91,7 +95,10 @@ which is still `None` → `AttributeError`. The PROBING branch guards with
 `if self.tunnel_transport` (`:195`) but MESH/marker do not.
 **Fix:** Create the tunnel endpoint before adding the local reader, or guard all sends.
 
-## M9 — cmsg parse lacks length validation; assumes single AF_INET ancillary record  [LOW, confidence medium]
+## M9 — cmsg parse lacks length validation; assumes single AF_INET ancillary record  [LOW → NIT, see 10-correctness-audit.md]
+> **AUDIT: overstated.** The offsets `[2:4]`=port and `[4:8]`=addr are *correct* for
+> `sockaddr_in`, and the kernel always supplies the full record. Only the missing length
+> check is valid (and only matters in combination with M3). Downgrade to a hardening nit.
 **Where:** `_handle_local_intercept` ancillary-data loop `:249-253`
 (`struct.unpack("!H", cmsg_data[2:4])`, `inet_ntoa(cmsg_data[4:8])`).
 **Why it's a bug:** No check that `cmsg_data` is long enough; a short/truncated or
@@ -127,7 +134,11 @@ dead for the Python side.
 **Fix:** Read `MESH_SUBNET` from the environment in `config.py`/`mesh_proxy.py`
 (`os.environ.get("MESH_SUBNET", "10.24.24.0/24")`).
 
-## M14 — `asyncio.create_task(...)` results are not retained → tasks may be GC'd mid-flight  [HIGH, confidence high]
+## M14 — `asyncio.create_task(...)` results are not retained → tasks may be GC'd mid-flight  [~~HIGH~~ → FALSE POSITIVE, see 10-correctness-audit.md]
+> **AUDIT: not a real bug on this runtime.** Both Containerfiles pin Python 3.11; the
+> premature-GC window was fixed in 3.7.2+. `_retransmit_loop` is an infinite task held by the
+> scheduler and `_probe_target` is short-lived. Keeping a handle is good practice (for
+> cancellation) but there's no defect. I overstated this; corrected.
 **Where:** `:229` `asyncio.create_task(self._retransmit_loop())` and `:272`
 `asyncio.create_task(self._probe_target(target_ip))` — neither return value is stored.
 **Why it's a bug:** CPython keeps only a **weak** reference to tasks; the docs explicitly
@@ -137,7 +148,10 @@ probes can therefore be collected and silently stop. This is intermittent and
 load/GC-dependent, which makes it nasty to debug.
 **Fix:** Store tasks in a set on the proxy (`self._tasks.add(t); t.add_done_callback(self._tasks.discard)`).
 
-## M12 — Retransmit loop mutates `unacked` while iterating; uses wall-clock  [LOW, confidence medium]
+## M12 — Retransmit loop mutates `unacked` while iterating; uses wall-clock  [LOW → mostly NIT, see 10-correctness-audit.md]
+> **AUDIT: the mutation claim is wrong.** It iterates a `list()` copy (`:312`) and the body
+> has no `await`, so there's no mutate-while-iterating hazard. Only the `time.time()`
+> wall-clock fragility is valid (code smell).
 **Where:** `_retransmit_loop` `:308-317`.
 **What:** Iterates `list(peer.unacked.items())` (safe copy) but reinserts under the same
 key (fine); however it also iterates `self.peers.items()` without a copy while

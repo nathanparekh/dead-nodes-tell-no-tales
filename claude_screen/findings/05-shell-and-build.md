@@ -2,6 +2,13 @@
 
 Cross-checked with `shellcheck` (`analysis_output/20_shellcheck.txt`).
 
+> **POST-MERGE / AUDIT STATUS (see `09-merge-impact.md`, `10-correctness-audit.md`):**
+> **B1, B2** (prebuilt-binary COPY, cross-arch) are **fixed** — the images now COPY+run
+> `counter.py`. **B3** (udp-counter name collision) is a **false positive** now — `build.sh`
+> builds `counter`/`sidecar`. **B7, B8** are **obsolete** — `test_without_proxy/` was deleted.
+> **B6** is **relocated** to `run_test_suite.sh:19-36` (still real). **B4, B5, B9–B12 hold**.
+> **B13** is a doc nit. The text below is the original (pre-merge) analysis.
+
 ---
 
 ## B1 — Images COPY a prebuilt `src/counter` that nothing builds and that is absent  [HIGH, confidence high]
@@ -96,7 +103,9 @@ $DETECTED_SUBNET`); unused vars SC2034 (`B_CONTAINER` `tests/test_local_b.sh:9`,
 `sudo ... > /tmp/...` redirects are not run as root (SC2024) — the documented checkpoint
 commands write the tarball as the *calling* user, which can fail under sudo-only perms.
 
-## B13 — `cmds.sh` live-migration example mixes compression extensions/flags  [LOW, confidence low]
+## B13 — `cmds.sh` live-migration example mixes compression extensions/flags  [LOW → DOC NIT, see 10-correctness-audit.md]
+> **AUDIT: overstated.** `cmds.sh` is non-executing documentation and podman doesn't infer
+> compression from the file extension. Doc nit only.
 **Where:** `cmds.sh:14-20`. Pre-checkpoint exports `.tar.zst`, post exports `.tar.gz`
 (`--export /tmp/post.tar.gz`), and restore mixes `--import`/`--import-previous`. Not
 obviously wrong but the inconsistent extensions/flags are error-prone; verify the

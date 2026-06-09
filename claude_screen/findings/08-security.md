@@ -32,7 +32,11 @@ exceptions that escape the reader callback (M3/M9). Auto-created peers and unbou
 `recv_buffer`/`probe_buffer`/`unacked` (M4/M10) let a remote sender exhaust memory.
 **Fix:** Validate all lengths before unpack; bound every per-peer structure; rate-limit.
 
-## SEC4 — Proxy will spoof ANY source IP to the local app on attacker's behalf  [MEDIUM, confidence medium]
+## SEC4 — Proxy will spoof ANY source IP to the local app on attacker's behalf  [MEDIUM → narrower, see 10-correctness-audit.md]
+> **AUDIT: overstated.** The delivered source is `remote_ip` = the tunnel sender's *actual*
+> address (`mesh_proxy.py:82,190-191`), not attacker-arbitrary. The attacker controls dest
+> IP/port and (via SEC1, no tunnel auth) can reach the port — real, but "ANY source IP" is
+> misleading.
 **Where:** `get_spoof_sock` binds the source from the tunnel header with `IP_TRANSPARENT`
 (`:157-181`, used at `:191`,`:303`); the header's TargetIP/SrcPort are attacker-controlled
 (no auth, SEC1).

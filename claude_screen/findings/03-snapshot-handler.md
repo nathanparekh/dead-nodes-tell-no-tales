@@ -91,14 +91,22 @@ in recorded order independent of the live counter.
 Root cause of M2; recorded here because the call lives in
 `_trigger_app_snapshot_out_of_band` (`:105-115`), `timeout=30`. Fix: async/executor.
 
-## S9 — `container_id = socket.gethostname()` may target the wrong container  [MEDIUM, confidence medium]
+## S9 — `container_id = socket.gethostname()` may target the wrong container  [HOLDS; priority LOW — see 10-correctness-audit.md]
+> **AUDIT: holds** (`--network container:` shares only the net namespace, not UTS, so
+> `gethostname()` returns the sidecar's id), but it is reachable **only via the dead
+> Chandy-Lamport path** (C9), so effective priority is low despite the high in-principle
+> severity.
 **Where:** `:97`. The sidecar shares the app's **network** namespace (`--network
 container:`), not necessarily its UTS/hostname, so `gethostname()` returns the *sidecar's*
 identity. The host checkpoint agent would then checkpoint the sidecar/itself rather than
 the app container it's supposed to snapshot.
 **Fix:** Pass the app container id explicitly (env var) rather than inferring it.
 
-## S10 — Snapshot ordering doesn't match Chandy-Lamport  [MEDIUM, confidence medium]
+## S10 — Snapshot ordering doesn't match Chandy-Lamport  [~~MEDIUM~~ → LOW/overstated, see 10-correctness-audit.md]
+> **AUDIT: overstated.** Re-reading the order — checkpoint (`:37`) → init recording (`:40`) →
+> broadcast markers (`:43-52`) → record channels (`:79-89`) — that *is* record-state →
+> send-markers → record-channels, i.e. correct C-L order. The snapshot is broken by S4–S7,
+> not by ordering. Downgrade.
 **Where:** initiator path (`mesh_proxy.py:236-242` → `process_message` with
 `remote_ip="127.0.0.1"`): it triggers the **local app checkpoint immediately** (`:37`)
 and only then records channels / broadcasts markers. Chandy-Lamport requires recording the
