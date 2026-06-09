@@ -195,7 +195,7 @@ class MeshProxy:
         if self.tunnel_transport:
             self.tunnel_transport.sendto(b"__PROBE__", (target_ip, TUNNEL_PORT))
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
 
         if self.routing_table.get(target_ip) == "PROBING":
             print(f"[*] Probe to {target_ip} timed out. Marking as EXTERNAL.")
