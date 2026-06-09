@@ -3,6 +3,7 @@
 /work/proxy/mesh_proxy.py:38: unused method 'datagram_received' (60% confidence)
 /work/proxy/mesh_proxy.py:234: unused variable 'flags' (60% confidence)
 /work/proxy/snapshot_handler.py:3: unused import 'os' (90% confidence)
+counter.py:8: unused function 'die' (60% confidence)
 redis_client.py:49: unused variable 'error_msg' (60% confidence)
 redis_client.py:276: unused variable 'frame' (100% confidence)
 redis_client.py:276: unused variable 'sig' (100% confidence)

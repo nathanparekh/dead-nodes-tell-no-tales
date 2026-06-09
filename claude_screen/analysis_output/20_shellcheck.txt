@@ -1,15 +1,6 @@
-===== /work/build-without-proxy.sh =====
-
-In /work/build-without-proxy.sh line 23:
-MESH_SUBNET="10.24.24.0/24"
-^---------^ SC2034 (warning): MESH_SUBNET appears unused. Verify use (or export if used externally).
-
-For more information:
-  https://www.shellcheck.net/wiki/SC2034 -- MESH_SUBNET appears unused. Verif...
-(shellcheck exit=1)
 ===== /work/build.sh =====
 
-In /work/build.sh line 49:
+In /work/build.sh line 47:
 sudo podman logs -f $SIDECAR_NAME
                     ^-----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
 
@@ -96,26 +87,13 @@ For more information:
 (shellcheck exit=1)
 ===== /work/proxy/run_send.sh =====
 (shellcheck exit=0)
-===== /work/run_test_proxycontainer.sh =====
-(shellcheck exit=0)
 ===== /work/run_test_suite.sh =====
 (shellcheck exit=0)
-===== /work/test_without_proxy/build.sh =====
+===== /work/test/run_tests.sh =====
 (shellcheck exit=0)
-===== /work/test_without_proxy/test_local_b.sh =====
+===== /work/test/test_local_b.sh =====
 
-In /work/test_without_proxy/test_local_b.sh line 13:
-B_RESTORE_NAME=counter-b
-^------------^ SC2034 (warning): B_RESTORE_NAME appears unused. Verify use (or export if used externally).
-
-For more information:
-  https://www.shellcheck.net/wiki/SC2034 -- B_RESTORE_NAME appears unused. Ve...
-(shellcheck exit=1)
-===== /work/tests/run_tests.sh =====
-(shellcheck exit=0)
-===== /work/tests/test_local_b.sh =====
-
-In /work/tests/test_local_b.sh line 9:
+In /work/test/test_local_b.sh line 9:
 B_CONTAINER=counter-b
 ^---------^ SC2034 (warning): B_CONTAINER appears unused. Verify use (or export if used externally).
 

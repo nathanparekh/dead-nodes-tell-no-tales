@@ -1,0 +1,89 @@
+[*] Repo: /Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales
+[*] Building tool images...
+STEP 1/3: FROM docker.io/library/debian:bookworm-slim
+STEP 2/3: RUN apt-get update && apt-get install -y --no-install-recommends     gcc     clang     clang-tools     cppcheck     shellcheck     make     libc6-dev     && rm -rf /var/lib/apt/lists/*
+--> Using cache 8ee0645c407be059e40749c9b70d714784458a986e7e07eb6ad6007f68ae6fd4
+--> 8ee0645c407b
+STEP 3/3: WORKDIR /work
+--> Using cache df5b44082a243ebac019a082b1b76736a3e7f520386550af971b5e3165d77862
+COMMIT dnt-tools
+--> df5b44082a24
+Successfully tagged localhost/dnt-tools:latest
+df5b44082a243ebac019a082b1b76736a3e7f520386550af971b5e3165d77862
+STEP 1/3: FROM docker.io/library/python:3.11-slim
+STEP 2/3: RUN pip install --no-cache-dir     pyflakes==3.2.0     "pylint==3.2.7"     "mypy==1.11.2"     vulture==2.11
+--> Using cache 602f6e3d4cf3dd295a16cf3e3cf499a2adfbb9d1f27a1b563a6f77cd85ecadba
+--> 602f6e3d4cf3
+STEP 3/3: WORKDIR /work
+--> Using cache 7a3e683a242794dc9b04a52f93e1d8a31453f9573348fe5435ba5f725e9991ff
+COMMIT dnt-pytools
+--> 7a3e683a2427
+Successfully tagged localhost/dnt-pytools:latest
+7a3e683a242794dc9b04a52f93e1d8a31453f9573348fe5435ba5f725e9991ff
+[*] Running C / shell analysis...
+=== uname / versions ===
+### Compiling src/counter.c with the project's exact flags (-Wall -Wextra -Werror -O2)
+### Compiling src/tcp-howto.c (-Wall -Wextra)
+### gcc -fanalyzer (deep) on both C files
+### cppcheck (all checks, inconclusive enabled)
+### clang static analyzer
+### shellcheck on every shell script
+### DONE (C/shell). Outputs in /out
+total 100
+drwxr-xr-x. 23 root root   736 Jun  9 20:19 .
+dr-xr-xr-x.  1 root root    82 Jun  9 20:19 ..
+-rw-r--r--.  1 root root   187 Jun  9 20:15 00_py_versions.txt
+-rw-r--r--.  1 root root   274 Jun  9 20:19 00_versions.txt
+-rw-r--r--.  1 root root    23 Jun  9 20:19 10_counter_build.txt
+-rw-r--r--.  1 root root   463 Jun  9 20:19 11_tcphowto_build.txt
+-rw-r--r--.  1 root root     0 Jun  9 20:19 12_gcc_analyzer_counter.txt
+-rw-r--r--.  1 root root   438 Jun  9 20:19 13_gcc_analyzer_tcphowto.txt
+-rw-r--r--.  1 root root   493 Jun  9 20:19 14_cppcheck.txt
+-rw-r--r--.  1 root root     0 Jun  9 20:19 15_clang_analyze_counter.txt
+-rw-r--r--.  1 root root     0 Jun  9 20:19 16_clang_analyze_tcphowto.txt
+-rw-r--r--.  1 root root  4480 Jun  9 20:19 20_shellcheck.txt
+-rw-r--r--.  1 root root   576 Jun  9 20:15 30_py_compile.txt
+-rw-r--r--.  1 root root  2791 Jun  9 20:15 31_pyflakes.txt
+-rw-r--r--.  1 root root     0 Jun  9 20:15 32_pylint_errors_proxy.txt
+-rw-r--r--.  1 root root     0 Jun  9 20:15 33_pylint_errors_src.txt
+-rw-r--r--.  1 root root   649 Jun  9 20:15 34_pylint_full_proxy.txt
+-rw-r--r--.  1 root root     0 Jun  9 20:15 35_mypy_proxy.txt
+-rw-r--r--.  1 root root   498 Jun  9 20:15 36_mypy_src.txt
+-rw-r--r--.  1 root root   561 Jun  9 20:15 37_vulture.txt
+-rw-r--r--.  1 root root 39127 Jun  9 20:15 _run.log
+-rw-r--r--.  1 root root  1618 Jun  9 20:19 _run2.log
+-rw-r--r--.  1 root root   251 Jun  9 20:19 _shell_list.txt
+[*] Running Python analysis...
+=== versions ===
+### py_compile (syntax)
+### pyflakes (undefined names, unused, etc.)
+### pylint ERRORS ONLY (-E): catches bad arg counts, unbalanced unpacking, undefined
+### pylint FULL (warnings too) for proxy core
+### mypy (type checks; may surface arg/tuple mismatches)
+### vulture (dead code)
+### DONE (python). Outputs in /out
+total 100
+drwxr-xr-x  23 root root   736 Jun  9 20:19 .
+dr-xr-xr-x.  1 root root   106 Jun  9 20:19 ..
+-rw-r--r--   1 root root   187 Jun  9 20:19 00_py_versions.txt
+-rw-r--r--   1 root root   274 Jun  9 20:19 00_versions.txt
+-rw-r--r--   1 root root    23 Jun  9 20:19 10_counter_build.txt
+-rw-r--r--   1 root root   463 Jun  9 20:19 11_tcphowto_build.txt
+-rw-r--r--   1 root root     0 Jun  9 20:19 12_gcc_analyzer_counter.txt
+-rw-r--r--   1 root root   438 Jun  9 20:19 13_gcc_analyzer_tcphowto.txt
+-rw-r--r--   1 root root   493 Jun  9 20:19 14_cppcheck.txt
+-rw-r--r--   1 root root     0 Jun  9 20:19 15_clang_analyze_counter.txt
+-rw-r--r--   1 root root     0 Jun  9 20:19 16_clang_analyze_tcphowto.txt
+-rw-r--r--   1 root root  4480 Jun  9 20:19 20_shellcheck.txt
+-rw-r--r--   1 root root   666 Jun  9 20:19 30_py_compile.txt
+-rw-r--r--   1 root root  2791 Jun  9 20:19 31_pyflakes.txt
+-rw-r--r--   1 root root     0 Jun  9 20:19 32_pylint_errors_proxy.txt
+-rw-r--r--   1 root root     0 Jun  9 20:19 33_pylint_errors_src.txt
+-rw-r--r--   1 root root   649 Jun  9 20:19 34_pylint_full_proxy.txt
+-rw-r--r--   1 root root     0 Jun  9 20:19 35_mypy_proxy.txt
+-rw-r--r--   1 root root   498 Jun  9 20:20 36_mypy_src.txt
+-rw-r--r--   1 root root   614 Jun  9 20:20 37_vulture.txt
+-rw-r--r--   1 root root 39127 Jun  9 20:15 _run.log
+-rw-r--r--   1 root root  3432 Jun  9 20:20 _run2.log
+-rw-r--r--   1 root root   251 Jun  9 20:19 _shell_list.txt
+[*] Analysis complete. See /Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/analysis_output

@@ -4,4 +4,5 @@
 [Errno 30] Read-only file system: '/work/proxy/__pycache__'===== /work/proxy/chat.py =====
 [Errno 30] Read-only file system: '/work/proxy/__pycache__'===== /work/proxy/udp_script.py =====
 [Errno 30] Read-only file system: '/work/proxy/__pycache__'===== /work/src/redis_client.py =====
+[Errno 30] Read-only file system: '/work/src/__pycache__'===== /work/src/counter.py =====
 [Errno 30] Read-only file system: '/work/src/__pycache__'

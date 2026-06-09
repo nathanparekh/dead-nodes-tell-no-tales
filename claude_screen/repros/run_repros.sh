@@ -28,4 +28,11 @@ podman run --rm \
   dnt-tools sh /work/claude_screen/repros/repro_counter.sh | tee "$OUT/repro_counter.txt"
 
 echo
+echo "[*] Python repro (counter.py — post-merge app; same defects)..."
+podman run --rm \
+  -v "$REPO":/work:ro \
+  docker.io/library/python:3.11-slim \
+  sh /work/claude_screen/repros/repro_counter_py.sh | tee "$OUT/repro_counter_py.txt"
+
+echo
 echo "[*] Repros complete. Output in $OUT"

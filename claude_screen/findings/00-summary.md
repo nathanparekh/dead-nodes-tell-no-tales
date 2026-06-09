@@ -1,5 +1,11 @@
 # Bug-hunt summary — all findings
 
+> **UPDATE (post-merge `4d1336c`):** the app was rewritten C→Python and the build/test
+> harness reorganized. The **proxy is untouched**, so every S/M/N/D/A/SEC-proxy finding
+> stands. All counter financial/auth bugs carried over to `counter.py` (re-proven). See
+> **`09-merge-impact.md`** for the full delta (fixed: C4, B1, B2, B7, B8; moot: integer
+> overflow; relocated: B6 → `run_test_suite.sh`; new: CP1 blanket-except).
+
 ~70 curated findings across the app, the checkpointing proxy, and the build/test harness.
 Confidence/verdict reflects both manual analysis and an independent 100-agent review pass
 that adversarially re-checked each item. **9 defects were reproduced at runtime** in

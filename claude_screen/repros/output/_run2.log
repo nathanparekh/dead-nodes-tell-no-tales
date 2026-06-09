@@ -1,0 +1,83 @@
+[*] Ensure dnt-tools image exists (for gcc)...
+[*] Python repro (proxy/snapshot crashers)...
+[info] process_and_deliver bound params = ['current_seq', 'p', 'ip', 'src_port', 'dst_port', 'target_local_ip']
+[info] required positional args = 6
+[*] Global Snapshot Complete! Flushing all cached channels...
+[CONFIRMED] BugA_arg_count: _finish_global_snapshot -> process_and_deliver raised TypeError: MeshProxy.process_and_deliver() missing 1 required positional argument: 'target_local_ip'
+[*] Global Snapshot Complete! Flushing all cached channels...
+[CONFIRMED] BugB_recv_buffer_arity: recv_buffer 4-tuple unpacked into 3 names raised ValueError: too many values to unpack (expected 3)
+[CONFIRMED] BugC_marker_wireformat: sent_seq=7 but parser read seq=30064771072; receiver payload=b'__:123e4567-e89b-12d3-a456-426614174000'; startswith('__MARKER__:')=False (marker silently treated as normal data)
+[CONFIRMED] BugC2_marker_never_acked: sender unacked key=7, receiver would ACK seq=30064771072 -> mismatch means marker is retransmitted indefinitely
+[*] Global Snapshot Complete! Flushing all cached channels...
+[CONFIRMED] BugD_replay_dropped: recv_seq already advanced to 2; replay of seqs [0,1] delivered 0 messages (expected 0 -> buffered traffic lost on replay)
+
+==== SUMMARY ====
+  BugA_arg_count: CONFIRMED
+  BugB_recv_buffer_arity: CONFIRMED
+  BugC_marker_wireformat: CONFIRMED
+  BugC2_marker_never_acked: CONFIRMED
+  BugD_replay_dropped: CONFIRMED
+5/5 defects reproduced.
+
+[*] C repro (counter.c value conservation / auth)...
+### Building counter.c
+### Start node A on 127.0.0.1:5000 with balance 10 (no node B exists)
+node A listening on udp/5000 with counter=10
+--- initial state:
+STATE A counter=10
+
+### BUG: non-atomic transfer to an UNREACHABLE destination.
+### Transfer 7 from A(5000) to a DEAD node 127.0.0.1:5999 (nothing listening).
+### A debits itself and fires a CREDIT at the dead host, then replies OK.
+A DEBIT tx=tx123 to=127.0.0.1:5999 amount=7 counter=3
+OK TRANSFER tx123
+transfer exit=0  (note: it reports OK)
+
+--- state of A AFTER the 'successful' transfer:
+STATE A counter=3
+>>> If counter=3, the 7 units were DESTROYED: A debited, credit went to a
+>>> dead host, no rollback, no app-level retry. Money is not conserved.
+
+### BUG: no authentication — any UDP client can RESET another node's balance.
+A RESET amount=999999 counter=999999
+OK RESET
+STATE A counter=999999
+>>> An unauthenticated RESET arbitrarily rewrote the balance.
+
+### BUG: any client can CREDIT (mint) funds with no authentication.
+A DEBIT tx=tx123 to=127.0.0.1:5999 amount=-5 counter=1000004
+OK TRANSFER tx123
+(transfer of negative amount: A's balance can be increased by a 'transfer')
+STATE A counter=1000004
+>>> Negative transfer amount INCREASES the sender's balance (no validation).
+
+### DONE
+
+[*] Python repro (counter.py — post-merge app; same defects)...
+### Start node A on 127.0.0.1:5000 with balance 10 (no node B exists)
+node A listening on udp/5000 with counter=10
+--- initial state:
+STATE A counter=10
+
+### C1: non-atomic transfer to an UNREACHABLE destination (counter.py:70,74,77)
+A DEBIT tx=tx123 to=127.0.0.1:5999 amount=7 counter=3
+OK TRANSFER tx123
+transfer exit=0  (reports OK)
+--- A after the 'successful' transfer:
+STATE A counter=3
+>>> counter=3 => the 7 units were DESTROYED (debit, credit to dead host, no rollback).
+
+### SEC2: unauthenticated RESET (counter.py:78-85)
+A RESET amount=999999 counter=999999
+OK RESET
+STATE A counter=999999
+
+### C3: negative transfer amount MINTS funds (counter.py:68,70 - no validation)
+A DEBIT tx=tx123 to=127.0.0.1:5999 amount=-5 counter=1000004
+OK TRANSFER tx123
+STATE A counter=1000004
+>>> balance increased => negative amounts mint money.
+
+### DONE (counter.py)
+
+[*] Repros complete. Output in /Users/nparekh/source/223b-distributed-systems/project/dead-nodes-tell-no-tales/claude_screen/repros/output

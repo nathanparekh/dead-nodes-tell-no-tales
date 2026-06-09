@@ -1,4 +1,14 @@
-# Findings — `src/counter.c` (the migrated workload) + `src/Makefile`
+# Findings — the counter workload (`src/counter.c`, now superseded by `src/counter.py`)
+
+> **POST-MERGE NOTE (see `09-merge-impact.md`).** A merge rewrote this app from C to
+> **`src/counter.py`**; the deployed app is now the Python version (`counter.c` remains in the
+> tree but is dead). The financial/auth defects below (**C1, C2, C3-negative, C5, C6, C9,
+> C10, SEC2**) **all carried over** to `counter.py` and were re-proven at runtime
+> (`repros/output/repro_counter_py.txt`). **C4 is fixed**; the **integer-overflow** parts of
+> C3/C3b are **moot** under Python big-ints. A new blanket-`except` bug (CP1) was introduced.
+> Line numbers below refer to `counter.c`; the `09` doc maps them to `counter.py`.
+
+## (original C analysis follows)
 
 Severity: critical/high/medium/low/info. Confidence: how sure the reviewer is it's a real defect.
 

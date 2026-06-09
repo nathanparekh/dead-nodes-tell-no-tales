@@ -23,6 +23,7 @@ claude_screen/
 │   ├── 06-entrypoint-iptables.md ← TPROXY + config       (N1–N7)
 │   ├── 07-aux-tools.md        ← redis/tcp-howto/chat/udp (A1–A8)
 │   ├── 08-security.md         ← SEC1–SEC6
+│   ├── 09-merge-impact.md     ← effect of the post-review merge (C→Python rewrite + reorg)
 │   ├── _workflow_raw.{md,json}← raw 100-agent output (traceability)
 │   └── _completeness_critic.md
 ├── harness/                   ← reproducible static-analysis containers
@@ -33,8 +34,9 @@ claude_screen/
 ├── analysis_output/           ← captured tool output (counter.c builds clean, etc.)
 └── repros/                    ← runtime proofs
     ├── repro_snapshot_bugs.py ← 5 proxy/snapshot crashers (no root/sockets)
-    ├── repro_counter.sh       ← counter value-conservation / auth defects
-    ├── run_repros.sh          ← runs both in containers
+    ├── repro_counter.sh       ← counter.c value-conservation / auth defects
+    ├── repro_counter_py.sh    ← same defects in the post-merge counter.py
+    ├── run_repros.sh          ← runs all three in containers
     └── output/                ← captured repro output (all defects CONFIRMED)
 ```
 

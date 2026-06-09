@@ -1,0 +1,25 @@
+### Start node A on 127.0.0.1:5000 with balance 10 (no node B exists)
+node A listening on udp/5000 with counter=10
+--- initial state:
+STATE A counter=10
+
+### C1: non-atomic transfer to an UNREACHABLE destination (counter.py:70,74,77)
+A DEBIT tx=tx123 to=127.0.0.1:5999 amount=7 counter=3
+OK TRANSFER tx123
+transfer exit=0  (reports OK)
+--- A after the 'successful' transfer:
+STATE A counter=3
+>>> counter=3 => the 7 units were DESTROYED (debit, credit to dead host, no rollback).
+
+### SEC2: unauthenticated RESET (counter.py:78-85)
+A RESET amount=999999 counter=999999
+OK RESET
+STATE A counter=999999
+
+### C3: negative transfer amount MINTS funds (counter.py:68,70 - no validation)
+A DEBIT tx=tx123 to=127.0.0.1:5999 amount=-5 counter=1000004
+OK TRANSFER tx123
+STATE A counter=1000004
+>>> balance increased => negative amounts mint money.
+
+### DONE (counter.py)
