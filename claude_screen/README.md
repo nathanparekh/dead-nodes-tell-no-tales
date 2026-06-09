@@ -25,6 +25,7 @@ claude_screen/
 │   ├── 08-security.md         ← SEC1–SEC6
 │   ├── 09-merge-impact.md     ← effect of the post-review merge (C→Python rewrite + reorg)
 │   ├── 10-correctness-audit.md← adversarial self-review: false positives / overstated / obsolete
+│   ├── 11-snapshot-divergence.md← git root-cause: mesh_proxy changes never ported to snapshot_handler (S1–S5)
 │   ├── _workflow_raw.{md,json}← raw 100-agent output (traceability)
 │   ├── _correctness_audit_raw.{md,json}← raw audit-pass output
 │   └── _completeness_critic.md
