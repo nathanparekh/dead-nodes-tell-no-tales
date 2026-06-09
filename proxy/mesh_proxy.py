@@ -149,18 +149,6 @@ class MeshProxy:
         self.last_probe_time = {}
         self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)
 
-        # FIX: Bulletproof runtime extraction of the container's primary IP
-        self.local_ips = {"127.0.0.1", "0.0.0.0"}
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # Does not transmit packets; merely queries the OS routing table
-            s.connect(("8.8.8.8", 1))
-            self.local_ips.add(s.getsockname()[0])
-            s.close()
-        except Exception:
-            pass
-        print(f"[*] Sidecar monitoring local boundaries: {self.local_ips}")
-
     def get_peer(self, ip):
         if ip not in self.peers:
             self.peers[ip] = PeerState()
@@ -265,13 +253,6 @@ class MeshProxy:
                         break
 
                 if target_ip and target_port:
-                    # FIX: If packet is an inbound request to this container,
-                    # hand it off locally while preserving the true host/client source IP.
-                    if target_ip in self.local_ips:
-                        spoof_sock = self.get_spoof_sock(orig_src_ip, orig_src_port)
-                        spoof_sock.sendto(data, ("127.0.0.1", target_port))
-                        continue
-
                     state = self.routing_table.get(target_ip)
                     last_probe = self.last_probe_time.get(target_ip, 0)
 

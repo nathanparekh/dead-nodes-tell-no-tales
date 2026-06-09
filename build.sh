@@ -12,14 +12,13 @@ if [ "$3" = "n" ]; then
     PROXY=false
 fi
 
-sudo podman rm -fa
 sudo podman build --network=host -t counter -f Containerfile.counter .
 
 if [ "$PROXY" = true ]; then
   sudo podman build --network=host -t sidecar -f Containerfile.rudp .
 fi
 
-
+# Prepare names so we only remove the app and sidecar containers
 SUFFIX=$1
 NODE_NAME=${2^^}
 APP_NAME="counter-$SUFFIX"
@@ -31,6 +30,12 @@ ASCII_VAL=$(printf "%d" "'$CHAR_LOWER")
 IP_SUFFIX=$((ASCII_VAL - 97 + 10))
 IP="10.24.24.$IP_SUFFIX"
 MESH_SUBNET="10.24.24.0/24"
+
+# Remove only the app and sidecar containers if they exist
+sudo podman rm -f "$APP_NAME"
+if [ "$PROXY" = true ]; then
+    sudo podman rm -f "$SIDECAR_NAME"
+fi
 
 echo "=== Deploying Container $APP_NAME ==="
 
@@ -49,6 +54,7 @@ if [ "$PROXY" = true ]; then
       --name "$SIDECAR_NAME" \
       --network "container:$APP_NAME" \
       --cap-add NET_ADMIN \
+      --sysctl net.ipv4.ip_nonlocal_bind=1 \
       -e MESH_SUBNET="$MESH_SUBNET" \
       sidecar
 

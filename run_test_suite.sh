@@ -36,6 +36,7 @@ if [ "$PROXY" = true ]; then
     --name "sidecar-test" \
     --network "container:test-container" \
     --cap-add NET_ADMIN \
+    --sysctl net.ipv4.ip_nonlocal_bind=1 \
     -e MESH_SUBNET="$MESH_SUBNET" \
     sidecar
 fi
