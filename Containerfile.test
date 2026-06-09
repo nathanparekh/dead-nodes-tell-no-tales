@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     podman \
     curl \
     sudo \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CONTAINER_HOST=unix:///run/podman/podman.sock

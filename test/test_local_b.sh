@@ -1,6 +1,5 @@
 #!/bin/bash
 # test_local_b.sh
-set -euo pipefail
 
 PORT=5000
 EXPECTED=30
@@ -24,7 +23,9 @@ echo "Checkpointing local B and its sidecar safely..."
 # Crucial: Use --tcp-established to freeze network interface sockets properly
 podman container ps
 podman container checkpoint counter-b --export /tmp/counter-b.tar.zst
-podman container checkpoint sidecar-b --export /tmp/sidecar-b.tar.zst
+if [ "$PROXY" = true ]; then
+    podman container checkpoint sidecar-b --export /tmp/sidecar-b.tar.zst
+fi
 
 podman rm -f sidecar-b counter-b >/dev/null
 
@@ -35,7 +36,9 @@ echo "Sidecar A will intercept this, queue it, and persistently retry behind the
 echo "Restoring local B components onto their macvlan network space."
 # Crucial: Add --tcp-established on restore so they don't lose network bindings
 podman container restore --tcp-established --import /tmp/counter-b.tar.zst
-podman container restore --tcp-established --import /tmp/sidecar-b.tar.zst
+if [ "$PROXY" = true ]; then
+    podman container restore --tcp-established --import /tmp/sidecar-b.tar.zst
+fi
 
 echo "Waiting for proxy to flush queued buffers..."
 sleep 1.5

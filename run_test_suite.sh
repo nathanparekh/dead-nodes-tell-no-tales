@@ -1,6 +1,10 @@
 #!/bin/bash
 # run_test_suite.sh
-set -euo pipefail
+
+PROXY=true
+if [ "$1" = "n" ]; then
+    PROXY=false
+fi
 
 # 1. Build the test suite runner container
 echo "Building test-runner..."
@@ -24,13 +28,14 @@ sudo podman run --rm -it \
   -e CONTAINER_HOST=unix:///run/podman/podman.sock \
   -e CONTAINER_CONNECTION=host-root-daemon \
   --name test-container \
-  test-runner
+  -e PROXY="$PROXY" test-runner
 
-
-echo "Attaching Sidecar Proxy to test container"
-sudo podman run -d --replace \
-  --name "sidecar-test" \
-  --network "container:test-container" \
-  --cap-add NET_ADMIN \
-  -e MESH_SUBNET="$MESH_SUBNET" \
-  sidecar
+if [ "$PROXY" = true ]; then
+    echo "Attaching Sidecar Proxy to test container"
+    sudo podman run -d --replace \
+    --name "sidecar-test" \
+    --network "container:test-container" \
+    --cap-add NET_ADMIN \
+    -e MESH_SUBNET="$MESH_SUBNET" \
+    sidecar
+fi

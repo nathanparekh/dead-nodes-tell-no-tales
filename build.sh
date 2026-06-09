@@ -1,16 +1,23 @@
 #!/bin/bash
 # deploy_node.sh
-set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 <container_suffix> <node_name>"
-    echo "Example: $0 b B"
+    echo "Usage: $0 <container_suffix> <node_name> <proxy-optional>"
+    echo "Example: $0 b B n"
     exit 1
+fi
+
+PROXY=true
+if [ "$3" = "n" ]; then
+    PROXY=false
 fi
 
 sudo podman rm -fa
 sudo podman build --network=host -t counter -f Containerfile.counter .
-sudo podman build --network=host -t sidecar -f Containerfile.rudp .
+
+if [ "$PROXY" = true ]; then
+  sudo podman build --network=host -t sidecar -f Containerfile.rudp .
+fi
 
 
 SUFFIX=$1
@@ -34,14 +41,16 @@ sudo podman run -d --replace \
   --network vlan:ip=$IP \
   counter node "$NODE_NAME" 5000 10
 
-# 3. Launch the sidecar sharing the EXACT same network namespace
-# It requires NET_ADMIN to implement the TPROXY rules inside that namespace
-echo "[*] Attaching Sidecar Proxy: $SIDECAR_NAME"
-sudo podman run -d --replace \
-  --name "$SIDECAR_NAME" \
-  --network "container:$APP_NAME" \
-  --cap-add NET_ADMIN \
-  -e MESH_SUBNET="$MESH_SUBNET" \
-  sidecar
+if [ "$PROXY" = true ]; then
+    # 3. Launch the sidecar sharing the EXACT same network namespace
+    # It requires NET_ADMIN to implement the TPROXY rules inside that namespace
+    echo "[*] Attaching Sidecar Proxy: $SIDECAR_NAME"
+    sudo podman run -d --replace \
+      --name "$SIDECAR_NAME" \
+      --network "container:$APP_NAME" \
+      --cap-add NET_ADMIN \
+      -e MESH_SUBNET="$MESH_SUBNET" \
+      sidecar
 
-sudo podman logs -f $SIDECAR_NAME
+    sudo podman logs -f $SIDECAR_NAME
+fi
