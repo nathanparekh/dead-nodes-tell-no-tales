@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import random
 import socket
 import struct
 import time
@@ -53,8 +54,9 @@ class TunnelProtocol(asyncio.DatagramProtocol):
                     remote_ip, []
                 ):
                     target_ip_bytes = socket.inet_aton(remote_ip)
+                    # Header: Type(1) + Seq(8) + SrcPort(2) + DstPort(2) + TargetIP(4) = 17 bytes
                     header = struct.pack(
-                        "!BIHH4s", 0, peer.send_seq, src_port, dst_port, target_ip_bytes
+                        "!BQHH4s", 0, peer.send_seq, src_port, dst_port, target_ip_bytes
                     )
                     packet = header + payload
                     self.proxy.tunnel_transport.sendto(packet, (remote_ip, TUNNEL_PORT))
@@ -68,24 +70,27 @@ class TunnelProtocol(asyncio.DatagramProtocol):
 
         msg_type = data[0]
 
-        # Incoming Data Packet (13-byte header)
+        # Incoming Data Packet (17-byte header)
         if msg_type == 0:
-            if len(data) < 13:
+            if len(data) < 17:
                 return
 
+            # Unpack 64-bit seq
             seq, orig_src_port, orig_dst_port, target_ip_bytes = struct.unpack(
-                "!IHH4s", data[1:13]
+                "!QHH4s", data[1:17]
             )
             exact_local_ip = socket.inet_ntoa(target_ip_bytes)
             print(
                 f"[<-] Received tunnel packet from {remote_ip}. Spoofing delivery to {exact_local_ip}:{orig_dst_port}..."
             )
 
-            payload = data[13:]
+            payload = data[17:]
 
-            ack_packet = struct.pack("!BI", 1, seq)
+            # Send ACK
+            ack_packet = struct.pack("!BQ", 1, seq)
             self.proxy.tunnel_transport.sendto(ack_packet, (remote_ip, TUNNEL_PORT))
 
+            # --- STRICT IN-ORDER DELIVERY LOGIC ---
             if seq == peer.recv_seq:
                 self.proxy.process_and_deliver(
                     seq,
@@ -97,6 +102,7 @@ class TunnelProtocol(asyncio.DatagramProtocol):
                 )
                 peer.recv_seq += 1
 
+                # Flush buffer for any packets that are now in order
                 while peer.recv_seq in peer.recv_buffer:
                     next_payload, next_src_port, next_dst_port, next_local_ip = (
                         peer.recv_buffer.pop(peer.recv_seq)
@@ -119,9 +125,13 @@ class TunnelProtocol(asyncio.DatagramProtocol):
                     exact_local_ip,
                 )
 
-        # Incoming ACK Packet
+        # Incoming ACK Packet (9-byte header: Type(1) + Seq(8))
         elif msg_type == 1:
-            seq = struct.unpack("!I", data[1:5])[0]
+            if len(data) < 9:
+                return
+
+            seq = struct.unpack("!Q", data[1:9])[0]
+
             if seq in peer.unacked:
                 del peer.unacked[seq]
 
@@ -129,14 +139,14 @@ class TunnelProtocol(asyncio.DatagramProtocol):
 class MeshProxy:
     def __init__(self):
         self.peers = {}
-        self.spoof_sockets = OrderedDict()  # (src_ip, src_port) -> socket
+        self.spoof_sockets = OrderedDict()
         self.tunnel_transport = None
         self.local_sock = None
         self.snapshot_ctrl = SnapshotController(self)
 
-        # Async Routing Table & Buffers
-        self.routing_table = {}  # IP -> "PROBING", "MESH", or "EXTERNAL"
-        self.probe_buffer = {}  # IP -> list of pending packets
+        self.routing_table = {}
+        self.probe_buffer = {}
+        self.last_probe_time = {}
         self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)
 
     def get_peer(self, ip):
@@ -156,9 +166,7 @@ class MeshProxy:
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.setsockopt(
-            socket.SOL_SOCKET, SO_REUSEPORT, 1
-        )  # Note: on older linux headers, you may just need to import SO_REUSEPORT
+        sock.setsockopt(socket.SOL_SOCKET, SO_REUSEPORT, 1)
         sock.setsockopt(socket.SOL_IP, IP_TRANSPARENT, 1)
         sock.setsockopt(socket.SOL_SOCKET, SO_MARK, PROXY_MARK)
         try:
@@ -178,13 +186,11 @@ class MeshProxy:
         consumed = self.snapshot_ctrl.process_message(
             ip, current_seq, p, src_port, dst_port
         )
-
         if not consumed:
             spoof_sock = self.get_spoof_sock(ip, src_port)
             spoof_sock.sendto(p, (target_local_ip, dst_port))
 
     async def _probe_target(self, target_ip):
-        """Actively probe an IP to see if it has a proxy sidecar."""
         print(f"[*] Probing {target_ip} for proxy sidecar...")
         if self.tunnel_transport:
             self.tunnel_transport.sendto(b"__PROBE__", (target_ip, TUNNEL_PORT))
@@ -194,7 +200,7 @@ class MeshProxy:
         if self.routing_table.get(target_ip) == "PROBING":
             print(f"[*] Probe to {target_ip} timed out. Marking as EXTERNAL.")
             self.routing_table[target_ip] = "EXTERNAL"
-            del self.routing_table[target_ip]
+
             for data, src_ip, src_port, dst_port in self.probe_buffer.pop(
                 target_ip, []
             ):
@@ -220,11 +226,9 @@ class MeshProxy:
         await loop.create_datagram_endpoint(
             lambda: TunnelProtocol(self), sock=tunnel_sock
         )
-
         asyncio.create_task(self._retransmit_loop())
 
     def _handle_local_intercept(self):
-        """Read intercepted packets, extract original IP:PORT."""
         try:
             while True:
                 data, ancdata, flags, addr = self.local_sock.recvmsg(65536, 1024)
@@ -239,7 +243,6 @@ class MeshProxy:
 
                 orig_src_port = addr[1]
                 orig_src_ip = addr[0]
-
                 target_ip = None
                 target_port = None
 
@@ -251,19 +254,25 @@ class MeshProxy:
 
                 if target_ip and target_port:
                     state = self.routing_table.get(target_ip)
+                    last_probe = self.last_probe_time.get(target_ip, 0)
 
-                    if state is None:
+                    if state is None or (
+                        state == "EXTERNAL"
+                        and time.time() - last_probe > PROBE_COOLDOWN
+                    ):
                         if ipaddress.ip_address(target_ip) in self.mesh_network:
                             print(
                                 f"[*] {target_ip} is in mesh subnet. Initiating probe..."
                             )
                             self.routing_table[target_ip] = "PROBING"
+                            self.last_probe_time[target_ip] = time.time()
                             self.probe_buffer[target_ip] = [
                                 (data, orig_src_ip, orig_src_port, target_port)
                             ]
                             asyncio.create_task(self._probe_target(target_ip))
                         else:
                             self.routing_table[target_ip] = "EXTERNAL"
+                            self.last_probe_time[target_ip] = time.time()
                             spoof_sock = self.get_spoof_sock(orig_src_ip, orig_src_port)
                             spoof_sock.sendto(data, (target_ip, target_port))
 
@@ -275,8 +284,9 @@ class MeshProxy:
                     elif state == "MESH":
                         peer = self.get_peer(target_ip)
                         target_ip_bytes = socket.inet_aton(target_ip)
+                        # Header: Type(1) + Seq(8) + SrcPort(2) + DstPort(2) + TargetIP(4) = 17 bytes
                         header = struct.pack(
-                            "!BIHH4s",
+                            "!BQHH4s",
                             0,
                             peer.send_seq,
                             orig_src_port,
