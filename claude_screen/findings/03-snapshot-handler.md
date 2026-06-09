@@ -1,5 +1,12 @@
 # Findings — `proxy/snapshot_handler.py` (Chandy-Lamport snapshot + CRIU trigger)
 
+> **UPDATE — S1–S5 NOW FIXED IN CODE (see `11-snapshot-divergence.md`).** The propagation
+> port (process_and_deliver 6th arg, `recv_buffer` 4-tuple, marker `!BQHH4s`) was applied to
+> `snapshot_handler.py` + `mesh_proxy.py` and verified in-container
+> (`repros/verify_snapshot_fix.py`). **Still open:** S6 (`is_snapshotting` never reset), S7
+> (replay vs already-advanced `recv_seq`), S8/M2 (blocking `urllib`). Descriptions below are
+> the original (pre-fix) analysis.
+
 This module is the most broken in the repo. Four independent defects each make the global
 snapshot crash or silently lose data. All four are **reproduced** at runtime in
 `repros/repro_snapshot_bugs.py` (output in `repros/output/repro_snapshot_bugs.txt`).

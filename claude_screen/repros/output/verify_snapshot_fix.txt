@@ -1,0 +1,9 @@
+[*] Global Snapshot Complete! Flushing all cached channels...
+[PASS] S1S2S3_replay_no_crash: replay delivered seq 0 then flushed buffered seq 1 cleanly; recv_seq=2
+[*] Marker received from 127.0.0.1. Initiating channel state recording.
+[*] Broadcasting MARKER to 10.24.24.11
+[PASS] S4S5_marker_roundtrips_and_acks: marker parses as 17-byte packet; payload=b'__MARKER__:test-snapshot-id'; parsed seq=0 == sender unacked key=0 -> True
+
+==== SUMMARY ====
+2/2 checks passed (PORT VERIFIED).
+Note: S6 (is_snapshotting reset), S7 (replay vs advanced recv_seq), and S8/M2 (blocking urllib) are SEPARATE snapshot-specific bugs, intentionally out of scope for this port.

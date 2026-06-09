@@ -14,12 +14,16 @@ if ! podman image exists dnt-tools; then
   podman build -t dnt-tools -f "$REPO/claude_screen/harness/Containerfile.tools" "$REPO/claude_screen/harness"
 fi
 
-echo "[*] Python repro (proxy/snapshot crashers)..."
+echo "[*] Snapshot fix VERIFICATION (post-port; S1-S5 should be resolved)..."
 podman run --rm \
   -v "$REPO":/work:ro \
   -e PYTHONPATH=/work/proxy \
   docker.io/library/python:3.11-slim \
-  python3 /work/claude_screen/repros/repro_snapshot_bugs.py | tee "$OUT/repro_snapshot_bugs.txt"
+  python3 /work/claude_screen/repros/verify_snapshot_fix.py | tee "$OUT/verify_snapshot_fix.txt"
+
+# NOTE: repro_snapshot_bugs.py demonstrated S1/S2/S4/S5/S7 against the PRE-FIX code.
+# Its captured evidence is in output/repro_snapshot_bugs.txt. It is NOT re-run here
+# because the snapshot_handler<-mesh_proxy port changed the cache/record shape it asserts.
 
 echo
 echo "[*] C repro (counter.c value conservation / auth)..."

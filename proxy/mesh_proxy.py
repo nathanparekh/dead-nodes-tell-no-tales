@@ -184,7 +184,7 @@ class MeshProxy:
         self, current_seq, p, ip, src_port, dst_port, target_local_ip
     ):
         consumed = self.snapshot_ctrl.process_message(
-            ip, current_seq, p, src_port, dst_port
+            ip, current_seq, p, src_port, dst_port, target_local_ip
         )
         if not consumed:
             spoof_sock = self.get_spoof_sock(ip, src_port)
@@ -237,7 +237,7 @@ class MeshProxy:
                     snapshot_id = str(uuid.uuid4()).encode()
                     marker_payload = b"__MARKER__:" + snapshot_id
                     self.snapshot_ctrl.process_message(
-                        "127.0.0.1", 0, marker_payload, 0, 0
+                        "127.0.0.1", 0, marker_payload, 0, 0, "127.0.0.1"
                     )
                     continue
 

@@ -17,7 +17,7 @@ class SnapshotController:
         self.recording_channels = set()
         self.channel_states = {}
 
-    def process_message(self, remote_ip, seq, payload, src_port, dst_port):
+    def process_message(self, remote_ip, seq, payload, src_port, dst_port, target_local_ip):
         """
         Process incoming payloads according to snapshot rules.
         Returns:
@@ -43,7 +43,11 @@ class SnapshotController:
                 for peer_ip, peer_state in self.proxy.peers.items():
                     if peer_ip != remote_ip:
                         print(f"[*] Broadcasting MARKER to {peer_ip}")
-                        header = struct.pack("!BIHH", 0, peer_state.send_seq, 0, 0)
+                        # Must match mesh_proxy's data framing so receivers can parse it:
+                        # Type(1) + Seq(8) + SrcPort(2) + DstPort(2) + TargetIP(4) = 17 bytes
+                        header = struct.pack(
+                            "!BQHH4s", 0, peer_state.send_seq, 0, 0, b"\x00\x00\x00\x00"
+                        )
                         packet = header + payload
                         self.proxy.tunnel_transport.sendto(
                             packet, (peer_ip, TUNNEL_PORT)
@@ -84,6 +88,7 @@ class SnapshotController:
                     "payload": payload,
                     "src_port": src_port,
                     "dst_port": dst_port,
+                    "target_local_ip": target_local_ip,
                 }
             )
             return True
@@ -132,15 +137,16 @@ class SnapshotController:
                 payload = msg["payload"]
                 src_port = msg["src_port"]
                 dst_port = msg["dst_port"]
+                target_local_ip = msg["target_local_ip"]
 
                 if seq == peer.recv_seq:
                     self.proxy.process_and_deliver(
-                        seq, payload, remote_ip, src_port, dst_port
+                        seq, payload, remote_ip, src_port, dst_port, target_local_ip
                     )
                     peer.recv_seq += 1
 
                     while peer.recv_seq in peer.recv_buffer:
-                        next_payload, next_src_port, next_dst_port = (
+                        next_payload, next_src_port, next_dst_port, next_local_ip = (
                             peer.recv_buffer.pop(peer.recv_seq)
                         )
                         self.proxy.process_and_deliver(
@@ -149,8 +155,14 @@ class SnapshotController:
                             remote_ip,
                             next_src_port,
                             next_dst_port,
+                            next_local_ip,
                         )
                         peer.recv_seq += 1
                 elif seq > peer.recv_seq:
-                    peer.recv_buffer[seq] = (payload, src_port, dst_port)
+                    peer.recv_buffer[seq] = (
+                        payload,
+                        src_port,
+                        dst_port,
+                        target_local_ip,
+                    )
         self.channel_states.clear()

@@ -56,7 +56,21 @@ helper on `MeshProxy` (e.g. `_deliver_in_order(peer, seq, payload, src_port, dst
 local_ip)` and a single `pack_data_header(...)`) and have both call sites use it, so a future
 header/tuple/signature change can't desync them again.
 
-## Not caused by the drift (don't expect a mesh_proxy port to fix these)
+## APPLIED & VERIFIED (this branch)
+The port above was applied:
+- **snapshot_handler.py** — `process_message` gained `target_local_ip`; marker reframed
+  `!BIHH`→`!BQHH4s` (17-byte, matches data packets); `channel_states` records and
+  `recv_buffer` uses `exact_local_ip` (4-tuple); both `process_and_deliver` calls pass the
+  6th arg.
+- **mesh_proxy.py** — the two `process_message(...)` call sites pass `target_local_ip`.
+
+Verified in-container (`repros/verify_snapshot_fix.py` → `repros/output/verify_snapshot_fix.txt`,
+`2/2 PORT VERIFIED`): snapshot replay delivers cached + buffered messages with **no
+TypeError/ValueError**, and the broadcast marker now parses as a 17-byte packet with an
+intact `__MARKER__:` payload and an ACK seq matching the sender's `unacked` key. → **S1, S2,
+S3, S4, S5 resolved.**
+
+## Not caused by the drift (don't expect a mesh_proxy port to fix these — STILL OPEN)
 - **S7** (replay uses already-advanced `recv_seq`) — snapshot-specific logic bug in the same
   loop; needs its own fix (don't advance `recv_seq` for buffered msgs, or replay independently).
 - **S6** (`is_snapshotting` never reset on failure) and **S8/M2** (blocking `urllib` on the

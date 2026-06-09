@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+HISTORICAL: this proves the defects against the PRE-FIX code (before the
+snapshot_handler <- mesh_proxy port). After that port, S1/S2/S4/S5 are resolved
+and the cache shape this script asserts has changed — run verify_snapshot_fix.py
+instead. The original captured evidence is in output/repro_snapshot_bugs.txt.
+
 Runtime proof of the snapshot_handler.py / mesh_proxy.py defects that static
 analyzers miss (because SnapshotController.proxy is untyped, pylint/mypy can't
 see process_and_deliver's signature).
