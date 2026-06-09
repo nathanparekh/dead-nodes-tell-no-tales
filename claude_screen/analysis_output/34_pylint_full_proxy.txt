@@ -1,0 +1,13 @@
+************* Module mesh_proxy
+mesh_proxy.py:10:0: W0401: Wildcard import config (wildcard-import)
+mesh_proxy.py:53:29: W0612: Unused variable 'src_ip' (unused-variable)
+mesh_proxy.py:174:8: W0612: Unused variable 'e' (unused-variable)
+mesh_proxy.py:234:31: W0612: Unused variable 'flags' (unused-variable)
+mesh_proxy.py:3:0: W0611: Unused import random (unused-import)
+************* Module snapshot_handler
+snapshot_handler.py:112:15: W0718: Catching too general exception Exception (broad-exception-caught)
+snapshot_handler.py:3:0: W0611: Unused import os (unused-import)
+
+-----------------------------------
+Your code has been rated at 9.76/10
+

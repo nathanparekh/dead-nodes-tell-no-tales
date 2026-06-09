@@ -1,0 +1,7 @@
+===== /work/proxy/mesh_proxy.py =====
+[Errno 30] Read-only file system: '/work/proxy/__pycache__'===== /work/proxy/snapshot_handler.py =====
+[Errno 30] Read-only file system: '/work/proxy/__pycache__'===== /work/proxy/config.py =====
+[Errno 30] Read-only file system: '/work/proxy/__pycache__'===== /work/proxy/chat.py =====
+[Errno 30] Read-only file system: '/work/proxy/__pycache__'===== /work/proxy/udp_script.py =====
+[Errno 30] Read-only file system: '/work/proxy/__pycache__'===== /work/src/redis_client.py =====
+[Errno 30] Read-only file system: '/work/src/__pycache__'

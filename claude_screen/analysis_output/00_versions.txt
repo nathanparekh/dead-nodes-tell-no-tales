@@ -1,0 +1,7 @@
+=== uname / versions ===
+Linux 6860c858294a 6.16.10-200.fc42.aarch64 #1 SMP PREEMPT_DYNAMIC Thu Oct  2 19:40:14 UTC 2025 aarch64 GNU/Linux
+gcc (Debian 12.2.0-14+deb12u1) 12.2.0
+Debian clang version 14.0.6
+Cppcheck 2.10
+ShellCheck - shell script analysis tool
+version: 0.9.0

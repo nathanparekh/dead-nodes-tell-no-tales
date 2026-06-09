@@ -1,0 +1,32 @@
+### Building counter.c
+### Start node A on 127.0.0.1:5000 with balance 10 (no node B exists)
+node A listening on udp/5000 with counter=10
+--- initial state:
+STATE A counter=10
+
+### BUG: non-atomic transfer to an UNREACHABLE destination.
+### Transfer 7 from A(5000) to a DEAD node 127.0.0.1:5999 (nothing listening).
+### A debits itself and fires a CREDIT at the dead host, then replies OK.
+A DEBIT tx=tx123 to=127.0.0.1:5999 amount=7 counter=3
+OK TRANSFER tx123
+transfer exit=0  (note: it reports OK)
+
+--- state of A AFTER the 'successful' transfer:
+STATE A counter=3
+>>> If counter=3, the 7 units were DESTROYED: A debited, credit went to a
+>>> dead host, no rollback, no app-level retry. Money is not conserved.
+
+### BUG: no authentication — any UDP client can RESET another node's balance.
+A RESET amount=999999 counter=999999
+OK RESET
+STATE A counter=999999
+>>> An unauthenticated RESET arbitrarily rewrote the balance.
+
+### BUG: any client can CREDIT (mint) funds with no authentication.
+A DEBIT tx=tx123 to=127.0.0.1:5999 amount=-5 counter=1000004
+OK TRANSFER tx123
+(transfer of negative amount: A's balance can be increased by a 'transfer')
+STATE A counter=1000004
+>>> Negative transfer amount INCREASES the sender's balance (no validation).
+
+### DONE

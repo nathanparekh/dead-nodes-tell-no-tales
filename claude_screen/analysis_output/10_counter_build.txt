@@ -1,0 +1,1 @@
+counter.c build exit=0

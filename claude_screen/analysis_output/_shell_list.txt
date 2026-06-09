@@ -1,0 +1,15 @@
+/work/build-without-proxy.sh
+/work/build.sh
+/work/cmds.sh
+/work/proxy/build.sh
+/work/proxy/entrypoint.sh
+/work/proxy/run_chat_a.sh
+/work/proxy/run_chat_b.sh
+/work/proxy/run_recv.sh
+/work/proxy/run_send.sh
+/work/run_test_proxycontainer.sh
+/work/run_test_suite.sh
+/work/test_without_proxy/build.sh
+/work/test_without_proxy/test_local_b.sh
+/work/tests/run_tests.sh
+/work/tests/test_local_b.sh

@@ -1,0 +1,18 @@
+[info] process_and_deliver bound params = ['current_seq', 'p', 'ip', 'src_port', 'dst_port', 'target_local_ip']
+[info] required positional args = 6
+[*] Global Snapshot Complete! Flushing all cached channels...
+[CONFIRMED] BugA_arg_count: _finish_global_snapshot -> process_and_deliver raised TypeError: MeshProxy.process_and_deliver() missing 1 required positional argument: 'target_local_ip'
+[*] Global Snapshot Complete! Flushing all cached channels...
+[CONFIRMED] BugB_recv_buffer_arity: recv_buffer 4-tuple unpacked into 3 names raised ValueError: too many values to unpack (expected 3)
+[CONFIRMED] BugC_marker_wireformat: sent_seq=7 but parser read seq=30064771072; receiver payload=b'__:123e4567-e89b-12d3-a456-426614174000'; startswith('__MARKER__:')=False (marker silently treated as normal data)
+[CONFIRMED] BugC2_marker_never_acked: sender unacked key=7, receiver would ACK seq=30064771072 -> mismatch means marker is retransmitted indefinitely
+[*] Global Snapshot Complete! Flushing all cached channels...
+[CONFIRMED] BugD_replay_dropped: recv_seq already advanced to 2; replay of seqs [0,1] delivered 0 messages (expected 0 -> buffered traffic lost on replay)
+
+==== SUMMARY ====
+  BugA_arg_count: CONFIRMED
+  BugB_recv_buffer_arity: CONFIRMED
+  BugC_marker_wireformat: CONFIRMED
+  BugC2_marker_never_acked: CONFIRMED
+  BugD_replay_dropped: CONFIRMED
+5/5 defects reproduced.

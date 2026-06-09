@@ -1,0 +1,12 @@
+# Static-analysis toolbox for Python.
+# Build:  podman build -t dnt-pytools -f claude_screen/harness/Containerfile.pytools claude_screen/harness
+# Used by run.sh (repo mounted at /work). Pip installs happen INSIDE the image only.
+FROM docker.io/library/python:3.11-slim
+
+RUN pip install --no-cache-dir \
+    pyflakes==3.2.0 \
+    "pylint==3.2.7" \
+    "mypy==1.11.2" \
+    vulture==2.11
+
+WORKDIR /work

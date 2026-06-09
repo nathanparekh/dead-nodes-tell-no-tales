@@ -1,0 +1,28 @@
+/work/proxy/mesh_proxy.py:3:1: 'random' imported but unused
+/work/proxy/mesh_proxy.py:10:1: 'from config import *' used; unable to detect undefined names
+/work/proxy/mesh_proxy.py:35:54: 'TUNNEL_PORT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:35:75: 'PROXY_MARK' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:62:76: 'TUNNEL_PORT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:91:72: 'TUNNEL_PORT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:150:50: 'MESH_SUBNET' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:163:39: 'MAX_SPOOF_SOCKETS' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:169:44: 'SO_REUSEPORT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:170:40: 'IP_TRANSPARENT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:171:44: 'SO_MARK' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:171:53: 'PROXY_MARK' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:174:9: local variable 'e' is assigned to but never used
+/work/proxy/mesh_proxy.py:179:48: 'SO_MARK' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:179:57: 'PROXY_MARK' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:196:68: 'TUNNEL_PORT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:215:51: 'IP_RECVORIGDSTADDR' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:216:51: 'IP_TRANSPARENT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:217:42: 'LOCAL_INTERCEPT_PORT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:223:51: 'SO_MARK' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:223:60: 'PROXY_MARK' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:224:38: 'TUNNEL_PORT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:250:69: 'IP_RECVORIGDSTADDR' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:261:56: 'PROBE_COOLDOWN' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:297:74: 'TUNNEL_PORT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:313:42: 'RETRY_TIMEOUT' may be undefined, or defined from star imports: config
+/work/proxy/mesh_proxy.py:315:71: 'TUNNEL_PORT' may be undefined, or defined from star imports: config
+/work/proxy/snapshot_handler.py:3:1: 'os' imported but unused

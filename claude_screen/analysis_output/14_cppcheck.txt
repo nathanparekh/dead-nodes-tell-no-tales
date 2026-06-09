@@ -1,0 +1,12 @@
+Checking /work/src/counter.c ...
+1/2 files checked 76% done
+Checking /work/src/tcp-howto.c ...
+/work/src/tcp-howto.c:12:7: style: The scope of the variable 'rd' can be reduced. [variableScope]
+  int rd, wr;
+      ^
+/work/src/tcp-howto.c:12:11: style: The scope of the variable 'wr' can be reduced. [variableScope]
+  int rd, wr;
+          ^
+2/2 files checked 100% done
+nofile:0:0: information: Cppcheck cannot find all the include files (use --check-config for details) [missingIncludeSystem]
+

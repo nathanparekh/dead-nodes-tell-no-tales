@@ -1,0 +1,8 @@
+=== versions ===
+Python 3.11.15
+3.2.0 Python 3.11.15 on Linux
+pylint 3.2.7
+astroid 3.2.4
+Python 3.11.15 (main, May 19 2026, 23:56:34) [GCC 14.2.0]
+mypy 1.11.2 (compiled: no)
+vulture 2.11

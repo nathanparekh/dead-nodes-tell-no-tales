@@ -1,0 +1,9 @@
+/work/src/tcp-howto.c: In function 'main_srv':
+/work/src/tcp-howto.c:45:25: warning: unused parameter 'argc' [-Wunused-parameter]
+   45 | static int main_srv(int argc, char **argv) {
+      |                     ~~~~^~~~
+/work/src/tcp-howto.c: In function 'main_cl':
+/work/src/tcp-howto.c:107:24: warning: unused parameter 'argc' [-Wunused-parameter]
+  107 | static int main_cl(int argc, char **argv) {
+      |                    ~~~~^~~~
+tcp-howto.c build exit=0

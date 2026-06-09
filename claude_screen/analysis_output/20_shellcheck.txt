@@ -1,0 +1,135 @@
+===== /work/build-without-proxy.sh =====
+
+In /work/build-without-proxy.sh line 23:
+MESH_SUBNET="10.24.24.0/24"
+^---------^ SC2034 (warning): MESH_SUBNET appears unused. Verify use (or export if used externally).
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2034 -- MESH_SUBNET appears unused. Verif...
+(shellcheck exit=1)
+===== /work/build.sh =====
+
+In /work/build.sh line 49:
+sudo podman logs -f $SIDECAR_NAME
+                    ^-----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean: 
+sudo podman logs -f "$SIDECAR_NAME"
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2086 -- Double quote to prevent globbing ...
+(shellcheck exit=1)
+===== /work/cmds.sh =====
+
+In /work/cmds.sh line 1:
+# from prince
+^-- SC2148 (error): Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.
+
+
+In /work/cmds.sh line 4:
+ps aux | grep "THE PID" # if process
+^----^ SC2009 (info): Consider using pgrep instead of grepping ps output.
+
+
+In /work/cmds.sh line 6:
+sudo podman container checkpoint <container_id> -e /tmp/checkpoint.tar.zst --tcp-established
+                                 ^-- SC2024 (info): sudo doesn't affect redirects. Use sudo cat file | ..
+                                              ^-- SC2024 (warning): sudo doesn't affect redirects. Use ..| sudo tee file
+
+
+In /work/cmds.sh line 14:
+sudo podman container checkpoint <container_id> --pre-checkpoint -l -e /tmp/checkpoint.tar.zst
+                                 ^-- SC2024 (info): sudo doesn't affect redirects. Use sudo cat file | ..
+                                              ^-- SC2024 (warning): sudo doesn't affect redirects. Use ..| sudo tee file
+
+
+In /work/cmds.sh line 16:
+sudo podman container checkpoint <container_id> --with-previous --export /tmp/post.tar.gz -l
+                                 ^-- SC2024 (info): sudo doesn't affect redirects. Use sudo cat file | ..
+                                              ^-- SC2024 (warning): sudo doesn't affect redirects. Use ..| sudo tee file
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2148 -- Tips depend on target shell and y...
+  https://www.shellcheck.net/wiki/SC2024 -- sudo doesn't affect redirects. Us...
+  https://www.shellcheck.net/wiki/SC2009 -- Consider using pgrep instead of g...
+(shellcheck exit=1)
+===== /work/proxy/build.sh =====
+(shellcheck exit=0)
+===== /work/proxy/entrypoint.sh =====
+
+In /work/proxy/entrypoint.sh line 10:
+	export MESH_SUBNET=$DETECTED_SUBNET
+                           ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean: 
+	export MESH_SUBNET="$DETECTED_SUBNET"
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2086 -- Double quote to prevent globbing ...
+(shellcheck exit=1)
+===== /work/proxy/run_chat_a.sh =====
+(shellcheck exit=0)
+===== /work/proxy/run_chat_b.sh =====
+
+In /work/proxy/run_chat_b.sh line 1:
+udo podman rm -f $(sudo podman ps -aq) >/dev/null 2>&1
+^-- SC2148 (error): Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive.
+                 ^-------------------^ SC2046 (warning): Quote this to prevent word splitting.
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2148 -- Tips depend on target shell and y...
+  https://www.shellcheck.net/wiki/SC2046 -- Quote this to prevent word splitt...
+(shellcheck exit=1)
+===== /work/proxy/run_recv.sh =====
+
+In /work/proxy/run_recv.sh line 2:
+sudo podman rm -f $(sudo podman ps -aq) >/dev/null 2>&1
+                  ^-------------------^ SC2046 (warning): Quote this to prevent word splitting.
+
+
+In /work/proxy/run_recv.sh line 3:
+sudo podman rm -f $(sudo podman ps -aq) >/dev/null 2>&1
+                  ^-------------------^ SC2046 (warning): Quote this to prevent word splitting.
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2046 -- Quote this to prevent word splitt...
+(shellcheck exit=1)
+===== /work/proxy/run_send.sh =====
+(shellcheck exit=0)
+===== /work/run_test_proxycontainer.sh =====
+(shellcheck exit=0)
+===== /work/run_test_suite.sh =====
+(shellcheck exit=0)
+===== /work/test_without_proxy/build.sh =====
+(shellcheck exit=0)
+===== /work/test_without_proxy/test_local_b.sh =====
+
+In /work/test_without_proxy/test_local_b.sh line 13:
+B_RESTORE_NAME=counter-b
+^------------^ SC2034 (warning): B_RESTORE_NAME appears unused. Verify use (or export if used externally).
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2034 -- B_RESTORE_NAME appears unused. Ve...
+(shellcheck exit=1)
+===== /work/tests/run_tests.sh =====
+(shellcheck exit=0)
+===== /work/tests/test_local_b.sh =====
+
+In /work/tests/test_local_b.sh line 9:
+B_CONTAINER=counter-b
+^---------^ SC2034 (warning): B_CONTAINER appears unused. Verify use (or export if used externally).
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2034 -- B_CONTAINER appears unused. Verif...
+(shellcheck exit=1)
+===== /work/proxy/entrypoint.sh =====
+
+In /work/proxy/entrypoint.sh line 10:
+	export MESH_SUBNET=$DETECTED_SUBNET
+                           ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean: 
+	export MESH_SUBNET="$DETECTED_SUBNET"
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2086 -- Double quote to prevent globbing ...
