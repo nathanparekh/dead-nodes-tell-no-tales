@@ -139,11 +139,7 @@ def sum_counters(args):
         b = get_counter(b_host, b_port)
         c = get_counter(c_host, c_port)
         
-        ok_a = 0 if a is not None else -1
-        ok_b = 0 if b is not None else -1
-        ok_c = 0 if c is not None else -1
-        
-        if ok_a == 0 and ok_b == 0 and ok_c == 0:
+        if a is not None and b is not None and c is not None:
             total = a + b + c
             status = "PASS" if total == expected else "FAIL"
             print(f"SUM a={a} b={b} c={c} total={total} expected={expected} {status}", flush=True)
@@ -156,7 +152,7 @@ def sum_counters(args):
             if stable >= stable_needed:
                 return 0
         else:
-            print(f"SUM waiting for nodes: a={ok_a} b={ok_b} c={ok_c}", flush=True)
+            print(f"SUM waiting for nodes: {'a' if a is None else ''} {'b' if b is None else ''} {'c' if c is None else ''}", flush=True)
             stable = 0
             
         time.sleep(0.1)
