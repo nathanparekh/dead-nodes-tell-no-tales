@@ -9,7 +9,9 @@ if [ "$#" -lt 2 ]; then
 fi
 
 sudo podman rm -fa
-sudo podman build --network=host -t udp-counter -f Containerfile .
+sudo podman build --network=host -t counter -f Containerfile.counter .
+sudo podman build --network=host -t sidecar -f Containerfile.rudp .
+
 
 SUFFIX=$1
 NODE_NAME=${2^^}
@@ -25,16 +27,12 @@ MESH_SUBNET="10.24.24.0/24"
 
 echo "=== Deploying Container $APP_NAME ==="
 
-
-# sudo podman rm -f "$APP_NAME" "$SIDECAR_NAME"
-# sudo podman rm -f "$APP_NAME" "$SIDECAR_NAME"
-
 # 2. Launch the core application container onto the macvlan network
 echo "[*] Starting App Container: $APP_NAME on IP $IP"
 sudo podman run -d --replace \
   --name "$APP_NAME" \
   --network vlan:ip=$IP \
-  udp-counter node "$NODE_NAME" 5000 10
+  counter node "$NODE_NAME" 5000 10
 
 # 3. Launch the sidecar sharing the EXACT same network namespace
 # It requires NET_ADMIN to implement the TPROXY rules inside that namespace
@@ -44,6 +42,6 @@ sudo podman run -d --replace \
   --network "container:$APP_NAME" \
   --cap-add NET_ADMIN \
   -e MESH_SUBNET="$MESH_SUBNET" \
-  rudp-sidecar
+  sidecar
 
 sudo podman logs -f $SIDECAR_NAME
