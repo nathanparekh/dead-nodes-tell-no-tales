@@ -9,8 +9,8 @@ if [ "$#" -lt 2 ]; then
 fi
 
 sudo podman rm -fa
-sudo podman build --network=host -t counter -f ../Containerfile.counter .
-sudo podman build --network=host -t sidecar -f ../Containerfile.rudp .
+sudo podman build --network=host -t counter -f Containerfile.counter .
+sudo podman build --network=host -t sidecar -f Containerfile.rudp .
 
 
 SUFFIX=$1

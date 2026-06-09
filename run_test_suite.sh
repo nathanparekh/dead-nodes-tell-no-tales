@@ -4,7 +4,7 @@ set -euo pipefail
 
 # 1. Build the test suite runner container
 echo "Building test-runner..."
-sudo podman build --network=host -t test-runner -f ../Containerfile.test .
+sudo podman build --network=host -t test-runner -f Containerfile.test .
 
 # 2. Ensure the HOST Podman system service is running as absolute root
 if ! sudo pgrep -f "podman system service" > /dev/null; then
