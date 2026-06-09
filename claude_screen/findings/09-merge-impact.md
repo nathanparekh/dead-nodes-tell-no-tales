@@ -113,6 +113,28 @@ at runtime (`repros/output/repro_counter_py.txt`).
 - **README gutted** — the build/run instructions (how to use `build.sh`, the per-node setup)
   were removed; only node IPs remain, worsening B10's "undocumented prerequisites." [LOW]
 
+## Independent re-eval confirmation
+A second, independent multi-agent pass reviewed only the merged changes (raw output:
+`_merge_reeval_raw.json`, 26 findings / 19 confirmed). It agreed with this assessment on
+every point — carried-over C1/C2/C3/SEC2/C6/C9/D1/D2/D3, fixed C4/B1/B2, relocated B6 — and
+sharpened a few items:
+- **CP1 is worse than "medium":** the blanket `except` is really *two* defects — (a) it
+  masks decode/send/parse errors and busy-spins, and (b) **truncated/malformed known
+  commands (`len(parts)` check fails) get no reply at all**, breaking request-reply symmetry
+  so the client just times out. Re-rated **high**.
+- **CP3 (carried over):** `recvfrom(BUF=512)` silently truncates datagrams >512 B (same as
+  the C version). Low/medium.
+- **B4 refinement (post-rename):** `build.sh` now builds images `counter`/`sidecar`, but the
+  **`proxy/` run scripts were not updated** — `run_chat_a.sh`/`run_chat_b.sh` still use
+  `udp-test` (only built by `proxy/build.sh`), and `run_recv.sh`/`run_send.sh` still use the
+  never-built `udp-tester`. The two build systems' image names have diverged further.
+- **`run_test_suite.sh` also references image `sidecar` it never builds** (only `build.sh`
+  builds it) — in addition to the relocated B6 bugs.
+- Checked-OK: `Containerfile.counter` (WORKDIR `/app`) vs `Containerfile.test` (WORKDIR
+  `/test`) both copy+run `counter.py` consistently within their own container — not a bug.
+- One verifier rated the `run_test_suite.sh` unbound-`$MESH_SUBNET` item a false positive;
+  direct reading says it *is* unbound under `set -euo pipefail`, so it's kept (recall).
+
 ## New evidence
 - `repros/output/repro_counter_py.txt` — runs the **actual deployed `counter.py`** and shows:
   a 7-unit transfer to a dead host destroys the funds (A: 10→3, exit 0/"OK"), an
