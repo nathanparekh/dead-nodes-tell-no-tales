@@ -40,10 +40,12 @@ class TunnelProtocol(asyncio.DatagramProtocol):
 
         # --- PROBE HANDSHAKE LOGIC ---
         if data == b"__PROBE__":
+            print(f"[*] [TUNNEL] Received PROBE from {remote_ip}. Sending ACK.")
             self.proxy.tunnel_transport.sendto(b"__PROBE_ACK__", addr)
             return
 
         if data == b"__PROBE_ACK__":
+            print(f"[*] [TUNNEL] Received PROBE_ACK from {remote_ip}!")
             if self.proxy.routing_table.get(remote_ip) == "PROBING":
                 print(f"[*] Received ACK from {remote_ip}. Upgraded to MESH node.")
                 self.proxy.routing_table[remote_ip] = "MESH"
@@ -192,6 +194,7 @@ class MeshProxy:
         if self.routing_table.get(target_ip) == "PROBING":
             print(f"[*] Probe to {target_ip} timed out. Marking as EXTERNAL.")
             self.routing_table[target_ip] = "EXTERNAL"
+            del self.routing_table[target_ip]
             for data, src_ip, src_port, dst_port in self.probe_buffer.pop(
                 target_ip, []
             ):
