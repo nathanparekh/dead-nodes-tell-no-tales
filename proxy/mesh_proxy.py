@@ -17,7 +17,9 @@ class PeerState:
         self.send_seq = 0
         self.unacked = {}  # {seq: (timestamp, packet_bytes)}
         self.recv_seq = 0
-        self.recv_buffer = {}  # {seq: (payload_bytes, orig_src_port, orig_dst_port)}
+        self.recv_buffer = (
+            {}
+        )  # {seq: (payload_bytes, orig_src_port, orig_dst_port, exact_local_ip)}
 
 
 class TunnelProtocol(asyncio.DatagramProtocol):
@@ -48,7 +50,10 @@ class TunnelProtocol(asyncio.DatagramProtocol):
                 for payload, src_ip, src_port, dst_port in self.proxy.probe_buffer.pop(
                     remote_ip, []
                 ):
-                    header = struct.pack("!BIHH", 0, peer.send_seq, src_port, dst_port)
+                    target_ip_bytes = socket.inet_aton(remote_ip)
+                    header = struct.pack(
+                        "!BIHH4s", 0, peer.send_seq, src_port, dst_port, target_ip_bytes
+                    )
                     packet = header + payload
                     self.proxy.tunnel_transport.sendto(packet, (remote_ip, TUNNEL_PORT))
                     peer.unacked[peer.send_seq] = (time.time(), packet)
@@ -56,32 +61,43 @@ class TunnelProtocol(asyncio.DatagramProtocol):
             return
 
         # --- HEADER PROTECTION ---
-        if len(data) < 9:
+        if len(data) < 5:
             return
 
         msg_type = data[0]
 
-        # Incoming Data Packet (9-byte header)
+        # Incoming Data Packet (13-byte header)
         if msg_type == 0:
-            seq, orig_src_port, orig_dst_port = struct.unpack("!IHH", data[1:9])
+            if len(data) < 13:
+                return
+
+            seq, orig_src_port, orig_dst_port, target_ip_bytes = struct.unpack(
+                "!IHH4s", data[1:13]
+            )
+            exact_local_ip = socket.inet_ntoa(target_ip_bytes)
             print(
-                f"[<-] Received tunnel packet from {remote_ip}. Spoofing delivery to {orig_dst_port}..."
+                f"[<-] Received tunnel packet from {remote_ip}. Spoofing delivery to {exact_local_ip}:{orig_dst_port}..."
             )
 
-            payload = data[9:]
+            payload = data[13:]
 
             ack_packet = struct.pack("!BI", 1, seq)
             self.proxy.tunnel_transport.sendto(ack_packet, (remote_ip, TUNNEL_PORT))
 
             if seq == peer.recv_seq:
                 self.proxy.process_and_deliver(
-                    seq, payload, remote_ip, orig_src_port, orig_dst_port
+                    seq,
+                    payload,
+                    remote_ip,
+                    orig_src_port,
+                    orig_dst_port,
+                    exact_local_ip,
                 )
                 peer.recv_seq += 1
 
                 while peer.recv_seq in peer.recv_buffer:
-                    next_payload, next_src_port, next_dst_port = peer.recv_buffer.pop(
-                        peer.recv_seq
+                    next_payload, next_src_port, next_dst_port, next_local_ip = (
+                        peer.recv_buffer.pop(peer.recv_seq)
                     )
                     self.proxy.process_and_deliver(
                         peer.recv_seq,
@@ -89,11 +105,17 @@ class TunnelProtocol(asyncio.DatagramProtocol):
                         remote_ip,
                         next_src_port,
                         next_dst_port,
+                        next_local_ip,
                     )
                     peer.recv_seq += 1
 
             elif seq > peer.recv_seq:
-                peer.recv_buffer[seq] = (payload, orig_src_port, orig_dst_port)
+                peer.recv_buffer[seq] = (
+                    payload,
+                    orig_src_port,
+                    orig_dst_port,
+                    exact_local_ip,
+                )
 
         # Incoming ACK Packet
         elif msg_type == 1:
@@ -114,8 +136,6 @@ class MeshProxy:
         self.routing_table = {}  # IP -> "PROBING", "MESH", or "EXTERNAL"
         self.probe_buffer = {}  # IP -> list of pending packets
         self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)
-
-        self.local_port_map = {}
 
     def get_peer(self, ip):
         if ip not in self.peers:
@@ -150,17 +170,15 @@ class MeshProxy:
         self.spoof_sockets[key] = sock
         return self.spoof_sockets[key]
 
-    def process_and_deliver(self, current_seq, p, ip, src_port, dst_port):
+    def process_and_deliver(
+        self, current_seq, p, ip, src_port, dst_port, target_local_ip
+    ):
         consumed = self.snapshot_ctrl.process_message(
             ip, current_seq, p, src_port, dst_port
         )
 
         if not consumed:
             spoof_sock = self.get_spoof_sock(ip, src_port)
-
-            target_local_ip = self.local_port_map.get(
-                dst_port, self.get_local_mesh_ip()
-            )
             spoof_sock.sendto(p, (target_local_ip, dst_port))
 
     async def _probe_target(self, target_ip):
@@ -202,22 +220,6 @@ class MeshProxy:
 
         asyncio.create_task(self._retransmit_loop())
 
-    def get_local_mesh_ip(self):
-        if hasatr(self, "_cached_mesh_ip"):
-            return self._cached_mesh_ip
-
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            target = str(next(self.mesh_network.hosts()))
-            s.connect((target, 1))
-            self._cached_mesh_ip = s.getsockname()[0]
-        except Exception:
-            self._cached_mesh_ip = "127.0.0.1"
-        finally:
-            s.close()
-
-        return self._cached_mesh_ip
-
     def _handle_local_intercept(self):
         """Read intercepted packets, extract original IP:PORT."""
         try:
@@ -234,8 +236,6 @@ class MeshProxy:
 
                 orig_src_port = addr[1]
                 orig_src_ip = addr[0]
-
-                self.local_port_map[orig_src_port] = orig_src_ip
 
                 target_ip = None
                 target_port = None
@@ -271,8 +271,14 @@ class MeshProxy:
 
                     elif state == "MESH":
                         peer = self.get_peer(target_ip)
+                        target_ip_bytes = socket.inet_aton(target_ip)
                         header = struct.pack(
-                            "!BIHH", 0, peer.send_seq, orig_src_port, target_port
+                            "!BIHH4s",
+                            0,
+                            peer.send_seq,
+                            orig_src_port,
+                            target_port,
+                            target_ip_bytes,
                         )
                         packet = header + data
                         self.tunnel_transport.sendto(packet, (target_ip, TUNNEL_PORT))
