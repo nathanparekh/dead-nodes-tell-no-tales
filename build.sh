@@ -32,10 +32,7 @@ IP="10.24.24.$IP_SUFFIX"
 MESH_SUBNET="10.24.24.0/24"
 
 # Remove only the app and sidecar containers if they exist
-sudo podman rm -f "$APP_NAME"
-if [ "$PROXY" = true ]; then
-    sudo podman rm -f "$SIDECAR_NAME"
-fi
+# sudo podman rm -fa
 
 echo "=== Deploying Container $APP_NAME ==="
 

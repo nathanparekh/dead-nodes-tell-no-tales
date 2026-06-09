@@ -155,7 +155,7 @@ def sum_counters(args):
             print(f"SUM waiting for nodes: {'a' if a is None else ''} {'b' if b is None else ''} {'c' if c is None else ''}", flush=True)
             stable = 0
             
-        time.sleep(0.1)
+        time.sleep(0.5)
         elapsed += 100
         
     return 1
