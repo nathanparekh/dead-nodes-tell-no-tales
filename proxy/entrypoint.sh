@@ -14,7 +14,7 @@ echo "[*] Configuring TPROXY routing rules for subnet: $MESH_SUBNET"
 
 ip rule add fwmark 1 lookup 100
 ip route add local 0.0.0.0/0 dev lo table 100
-iptables -t mangle -A OUTPUT -p udp -d "$MESH_SUBNET" -m mark ! --mark 99 -j MARK --set-mark 1
+iptables -t mangle -A OUTPUT -p udp -d "$MESH_SUBNET" --dport 9001 -j ACCEPT
 iptables -t mangle -A PREROUTING -p udp -m mark --mark 1 -j TPROXY --on-port 9000 --tproxy-mark 1
 echo "[*] TPROXY routing configured successfully."
 exec python mesh_proxy.py
