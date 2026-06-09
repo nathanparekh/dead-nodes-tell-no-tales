@@ -8,6 +8,7 @@ if [ "$#" -lt 2 ]; then
     exit 1
 fi
 
+sudo podman rm -fa
 sudo podman build --network=host -t udp-counter -f Containerfile .
 
 SUFFIX=$1
@@ -24,7 +25,6 @@ MESH_SUBNET="10.24.24.0/24"
 
 echo "=== Deploying Container $APP_NAME ==="
 
-sudo podman kill "$SIDECAR_NAME" && sudo podman kill "$APP_NAME"
 
 # sudo podman rm -f "$APP_NAME" "$SIDECAR_NAME"
 # sudo podman rm -f "$APP_NAME" "$SIDECAR_NAME"
@@ -45,3 +45,5 @@ sudo podman run -d --replace \
   --cap-add NET_ADMIN \
   -e MESH_SUBNET="$MESH_SUBNET" \
   rudp-sidecar
+
+sudo podman logs -f $SIDECAR_NAME
