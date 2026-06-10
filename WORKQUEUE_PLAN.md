@@ -180,7 +180,56 @@ is *weaker* than token ring's, and intellectual honesty requires saying why:
 ## 13. Open questions
 
 1. Host CRIU **restore** path — built, or only checkpoint? (Shared prerequisite with any
-   checkpoint-based app.)
+   checkpoint-based app.) **Resolved:** `checkpoint_agent.py` + `test/test_workqueue_snapshot.sh` now provide both — see §14.
 2. Should clients retain submitted-but-unconfirmed jobs and re-submit on timeout? That re-introduces
    recovery (at the client) — keep clients fire-and-forget to preserve the property, and note it.
 3. Keep `counter` and/or token ring alongside for contrast, or replace?
+
+## 14. Running the experiment (M2-M6 harness)
+
+Three pieces implement §9/§11: `build_workqueue.sh` (per-node deploy, mirrors `build.sh`),
+`checkpoint_agent.py` (the host-side CRIU agent behind `:9090`, §8), and
+`test/test_workqueue_snapshot.sh` (the M6 driver).
+
+**Per-host prerequisites**
+
+- podman with working CRIU checkpoint/restore (`podman container checkpoint` succeeds).
+- The `vlan` macvlan network exists (carries the `10.24.24.0/24` mesh, as in `build.sh`).
+- The agent is running as root: `sudo python3 checkpoint_agent.py` — it serves
+  `POST /checkpoint` on `0.0.0.0:9090` (sidecars reach it via `host.containers.internal`);
+  sanity-check with `curl localhost:9090/health` → `ok`.
+- The proxy on this branch must carry the snapshot-path port (markers framed with the 17-byte
+  `!BQHH4s` tunnel header, 6-arg replay; branch `bug-hunt-claude-screen`, commit `aa6fc62`)
+  **and** a fix for the still-open S7 replay bug (recorded in-flight messages dropped because
+  `recv_seq` already advanced — `claude_screen/findings/11-snapshot-divergence.md`). The driver's
+  preflight refuses to run without the port and prints how an unfixed S7 manifests.
+
+**Single-host quickstart** (a=coordinator, b/c=workers, d=client, all four pairs on one host):
+
+    sudo ./test/test_workqueue_snapshot.sh --deploy
+
+The driver primes all channels, submits jobs 1–8, applies `tc netem` (env `DELAY_MS`, default
+3000 ms) to the coordinator's egress, submits jobs 9–10 and triggers the snapshot in a single
+exec (catching both `JOB`s on the wire), collects the eight CRIU exports from
+`/tmp/snapshots/<snapshot_id>/`, then runs the verdict legs. **PASS looks like:**
+
+| leg | expected |
+|---|---|
+| live continuation (no restore) | `verify 10` → **PASS** (sanity) |
+| restore (a): apps **and** sidecars from the cut | `verify 10` → **PASS** |
+| restore (b): apps from the cut, **fresh** sidecars | `verify 10` → **FAIL missing=9,10** |
+
+Exit code 0 iff exactly PASS / PASS / FAIL **with leg (b) failing for exactly `missing=9,10`**
+(any other failure — unreachable workers, non-disjoint sets — is broken plumbing, not the
+property). `--criu-only` skips restore (a) and runs only the control leg (b) after
+snapshot + kill (the M6 flag). Tunables: `DELAY_MS`, `N_JOBS`, `APP_PORT`.
+
+Two operational notes: post-trigger verification runs over **loopback** inside each app
+container (no node ever markers back toward the snapshot initiator, so the client's sidecar
+records-and-consumes every mesh reply to the client after the trigger — client-mesh
+observation would hang); and the driver reports a **"catch window blown"** diagnosis when the
+client-pair checkpoint took ≥ `DELAY_MS` (raise `DELAY_MS` and re-run). After an aborted run,
+re-run with `--deploy` (surviving workers retain completed jobs).
+
+Multi-host is out of scope: it needs manual `build_workqueue.sh` runs per node plus one agent
+per host — the driver currently assumes a single host.
