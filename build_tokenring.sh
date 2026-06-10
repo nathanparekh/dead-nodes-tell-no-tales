@@ -4,6 +4,8 @@
 if [ "$#" -lt 3 ]; then
     echo "Usage: $0 <container_suffix> <node_name> <has_token> <proxy-optional>"
     echo "Example: $0 b B 0 n"
+    echo "Env knobs: HOLD_MS (default 500), LOSS_TIMEOUT_MS (default: loss recovery off)"
+    echo "The M5/M6 demo requires LOSS_TIMEOUT_MS (e.g. 60000) on every node."
     exit 1
 fi
 
@@ -44,13 +46,13 @@ echo "=== Deploying Container $APP_NAME ==="
 # 2. Launch the core application container onto the macvlan network
 if [ "$HAS_TOKEN" = "1" ]; then
     echo "[!] HAS_TOKEN=1: deploy this node LAST. Its successor ($NEXT_IP) must already be"
-    echo "[!] running, or the boot token (forwarded ~500ms after start) is lost forever."
+    echo "[!] running, or the boot token (forwarded HOLD_MS after start) is lost forever."
 fi
 echo "[*] Starting App Container: $APP_NAME on IP $IP (successor $NEXT_IP)"
 sudo podman run -d --replace \
   --name "$APP_NAME" \
   --network vlan:ip=$IP \
-  tokenring node "$NODE_NAME" 5000 "$NEXT_IP" 5000 "$HAS_TOKEN" 500
+  tokenring node "$NODE_NAME" 5000 "$NEXT_IP" 5000 "$HAS_TOKEN" "${HOLD_MS:-500}" ${LOSS_TIMEOUT_MS:+"$LOSS_TIMEOUT_MS"}
 
 if [ "$PROXY" = true ]; then
     # 3. Launch the sidecar sharing the EXACT same network namespace

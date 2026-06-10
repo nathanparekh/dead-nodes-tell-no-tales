@@ -4,6 +4,7 @@ import os
 import urllib.request
 import json
 import socket
+import base64
 
 from config import TUNNEL_PORT
 
@@ -40,16 +41,24 @@ class SnapshotController:
                 self.recording_channels = set(self.proxy.peers.keys())
                 self.recording_channels.discard(remote_ip)
 
+                # Chandy-Lamport: send the marker on ALL outgoing channels,
+                # including back to the peer it came from. Otherwise the
+                # initiator (whose marker reaches everyone first) never gets
+                # markers back, never terminates, and swallows every later
+                # message on its recorded channels.
                 for peer_ip, peer_state in self.proxy.peers.items():
-                    if peer_ip != remote_ip:
-                        print(f"[*] Broadcasting MARKER to {peer_ip}")
-                        header = struct.pack("!BIHH", 0, peer_state.send_seq, 0, 0)
-                        packet = header + payload
-                        self.proxy.tunnel_transport.sendto(
-                            packet, (peer_ip, TUNNEL_PORT)
-                        )
-                        peer_state.unacked[peer_state.send_seq] = (time.time(), packet)
-                        peer_state.send_seq += 1
+                    print(f"[*] Broadcasting MARKER to {peer_ip}")
+                    # Must match mesh_proxy's data framing so receivers can parse it:
+                    # Type(1) + Seq(8) + SrcPort(2) + DstPort(2) + TargetIP(4) = 17 bytes
+                    header = struct.pack(
+                        "!BQHH4s", 0, peer_state.send_seq, 0, 0, b"\x00\x00\x00\x00"
+                    )
+                    packet = header + payload
+                    self.proxy.tunnel_transport.sendto(
+                        packet, (peer_ip, TUNNEL_PORT)
+                    )
+                    peer_state.unacked[peer_state.send_seq] = (time.time(), packet)
+                    peer_state.send_seq += 1
 
                 for ip in self.recording_channels:
                     self.channel_states[ip] = []
@@ -97,7 +106,9 @@ class SnapshotController:
         container_id = socket.gethostname()
 
         print("[!] Out-of-Band Signal: Telling local app to snapshot memory NOW!")
-        agent_url = "http://host.containers.internal:9090/checkpoint"
+        agent_url = os.environ.get(
+            "CHECKPOINT_AGENT_URL", "http://host.containers.internal:9090/checkpoint"
+        )
         payload = json.dumps(
             {"container_id": container_id, "snapshot_id": snapshot_id}
         ).encode("utf-8")
@@ -116,8 +127,27 @@ class SnapshotController:
 
     def _finish_global_snapshot(self):
         print("[*] Global Snapshot Complete! Flushing all cached channels...")
+        sid = self.current_snapshot_id.decode()
         self.is_snapshotting = False
         self.current_snapshot_id = None
+
+        try:
+            channels = {
+                ip: [
+                    {
+                        "seq": m["seq"],
+                        "payload_b64": base64.b64encode(m["payload"]).decode(),
+                        "src_port": m["src_port"],
+                        "dst_port": m["dst_port"],
+                    }
+                    for m in sorted(msgs, key=lambda x: x["seq"])
+                ]
+                for ip, msgs in self.channel_states.items()
+            }
+            with open(f"/tmp/channel_states_{sid}.json", "w") as f:
+                json.dump({"snapshot_id": sid, "channels": channels}, f)
+        except Exception as e:
+            print(f"[!] WARNING: failed to write channel state dump: {e}")
 
         for remote_ip, recorded_state in self.channel_states.items():
             if not recorded_state:
