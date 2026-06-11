@@ -14,6 +14,10 @@ if [ "$4" = "n" ]; then
     PROXY=false
 fi
 
+BREAKOUT_NET=breakout
+BREAKOUT_GW=10.99.0.1
+BREAKOUT_URL="http://$BREAKOUT_GW:8989"
+
 sudo podman build --network=host -t tokenring -f Containerfile.tokenring .
 
 if [ "$PROXY" = true ]; then
@@ -43,6 +47,23 @@ NEXT_IP="10.24.24.$NEXT_IP_SUFFIX"
 
 echo "=== Deploying Container $APP_NAME ==="
 
+# The sidecar's snapshot handler calls the host's breakout receiver, and it
+# shares the app container's network namespace — so the app container gets the
+# breakout bridge attached when (and only when) it carries a sidecar. The host
+# is unreachable by name from a macvlan child interface, which is exactly why
+# the breakout bridge (and its fixed gateway 10.99.0.1) exists.
+NETWORK_ARGS=(--network "vlan:ip=$IP")
+if [ "$PROXY" = true ]; then
+    if ! sudo podman network exists "$BREAKOUT_NET"; then
+        echo "[*] Creating breakout network ($BREAKOUT_GW)"
+        sudo podman network create --subnet 10.99.0.0/24 --gateway "$BREAKOUT_GW" "$BREAKOUT_NET"
+    fi
+    NETWORK_ARGS+=(--network "$BREAKOUT_NET")
+    # Note: the sidecar POSTs pair-checkpoints to the host receiver; start it
+    # with `sudo python3 proxy/breakout_receiver.py` (node_ctl.sh / the demo
+    # harness do this — see harness/README.md).
+fi
+
 # 2. Launch the core application container onto the macvlan network
 if [ "$HAS_TOKEN" = "1" ]; then
     echo "[!] HAS_TOKEN=1: deploy this node LAST. Its successor ($NEXT_IP) must already be"
@@ -51,7 +72,7 @@ fi
 echo "[*] Starting App Container: $APP_NAME on IP $IP (successor $NEXT_IP)"
 sudo podman run -d --replace \
   --name "$APP_NAME" \
-  --network vlan:ip=$IP \
+  "${NETWORK_ARGS[@]}" \
   tokenring node "$NODE_NAME" 5000 "$NEXT_IP" 5000 "$HAS_TOKEN" "${HOLD_MS:-500}" ${LOSS_TIMEOUT_MS:+"$LOSS_TIMEOUT_MS"}
 
 if [ "$PROXY" = true ]; then
@@ -64,6 +85,7 @@ if [ "$PROXY" = true ]; then
       --cap-add NET_ADMIN \
       --sysctl net.ipv4.ip_nonlocal_bind=1 \
       -e MESH_SUBNET="$MESH_SUBNET" \
+      -e BREAKOUT_URL="$BREAKOUT_URL" \
       sidecar
 
     sudo podman logs -f $SIDECAR_NAME

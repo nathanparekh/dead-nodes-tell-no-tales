@@ -17,9 +17,9 @@
 #                       checkpoint, or the token outruns the markers)
 #   LOSS_TIMEOUT_MS     loss-recovery timer; MUST match how the nodes were
 #                       deployed (default 60000)
-#   SNAP_DIR            checkpoint dir on each host (default /var/lib/tokenring-demo)
+#   SNAP_DIR            checkpoint dir on each host (default /tmp/snapshots)
 #   VERIFY_ROUNDS       rounds per verify  (default 30)
-#   AGENT_PORT          checkpoint agent   (default 9090)
+#   BREAKOUT_GW         breakout receiver gateway IP (default 10.99.0.1; port 8989)
 # Flags:
 #   --resting    M3 plumbing check: no netem, snapshot while the token RESTS in
 #                a node, restore (a) only, expect PASS.
@@ -32,9 +32,10 @@ A_IP=${A_IP:-10.24.24.10}; B_IP=${B_IP:-10.24.24.11}; C_IP=${C_IP:-10.24.24.12}
 PORT=${PORT:-5000}
 NETEM_MS=${NETEM_MS:-5000}
 LOSS_TIMEOUT_MS=${LOSS_TIMEOUT_MS:-60000}
-SNAP_DIR=${SNAP_DIR:-/var/lib/tokenring-demo}
+SNAP_DIR=${SNAP_DIR:-/tmp/snapshots}
 VERIFY_ROUNDS=${VERIFY_ROUNDS:-30}
-AGENT_PORT=${AGENT_PORT:-9090}
+BREAKOUT_GW=${BREAKOUT_GW:-10.99.0.1}
+BREAKOUT_PORT=${BREAKOUT_PORT:-8989}
 
 CRIU_ONLY=0; RESTING=0
 for arg in "$@"; do
@@ -96,8 +97,11 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------
 banner 1 "preflight"
 for x in a b c; do
-    host_run "$x" curl -sf "localhost:$AGENT_PORT/health" >/dev/null \
-        || die "checkpoint agent on host $x not answering on :$AGENT_PORT (see harness/README.md)"
+    # Ensure the breakout receiver is up on this host, then health-check it on
+    # the breakout gateway (10.99.0.1:8989).
+    node_run "$x" receiver-up >/dev/null 2>&1 || true
+    node_run "$x" receiver-health \
+        || die "breakout receiver on host $x not answering on $BREAKOUT_GW:$BREAKOUT_PORT (see harness/README.md)"
     ps_out=$(node_run "$x" ps)
     echo "$ps_out" | grep "tokenring-$x" | grep -q "Up" || die "tokenring-$x is not running on host $x"
     echo "$ps_out" | grep "sidecar-$x"   | grep -q "Up" || die "sidecar-$x is not running on host $x"
@@ -160,7 +164,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     SID=""
     sleep 2
 done
-[ -n "$SID" ] || die "no complete checkpoint set within 120s (agent logs? sidecar can reach :$AGENT_PORT?)"
+[ -n "$SID" ] || die "no complete checkpoint set within 120s (receiver log /var/log/breakout_receiver.log? sidecar can reach $BREAKOUT_GW:$BREAKOUT_PORT?)"
 echo "[*] snapshot id: $SID"
 node_run a netem-off a || true
 for x in a b c; do

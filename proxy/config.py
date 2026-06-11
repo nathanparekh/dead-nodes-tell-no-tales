@@ -10,6 +10,10 @@ PROBE_COOLDOWN = 5.0
 # --- Application Configuration ---
 MESH_SUBNET = "10.24.24.0/24"
 
+# --- Snapshot ---
+# Seconds to wait for all peer markers before aborting a stuck snapshot.
+SNAPSHOT_TIMEOUT = 30.0
+
 # --- Eviction Thresholds ---
 MAX_SPOOF_SOCKETS = 512
 

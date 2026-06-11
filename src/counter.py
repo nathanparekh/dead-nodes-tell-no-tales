@@ -4,6 +4,7 @@ import socket
 import time
 
 BUF = 512
+PORT = 5000
 
 def die(msg):
     print(msg, file=sys.stderr)
@@ -26,6 +27,8 @@ def send_udp(host, port, msg):
 
 def request_udp(host, port, msg, timeout_ms):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(('', PORT)) 
     try:
         sock.sendto(msg.encode('utf-8'), (host, int(port)))
         sock.settimeout(timeout_ms / 1000.0)
@@ -203,3 +206,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
