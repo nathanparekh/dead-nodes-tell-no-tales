@@ -31,6 +31,14 @@ if [ "$3" = "n" ]; then
     PROXY=false
 fi
 
+# Breakout bridge: the sidecar's snapshot handler POSTs to the host-side
+# breakout receiver (proxy/breakout_receiver.py) at this gateway. The apps run
+# on the `vlan` macvlan, which cannot route back to the host through the usual
+# container-to-host gateway — hence the dedicated bridge. Mirrors build.sh.
+BREAKOUT_NET=breakout
+BREAKOUT_GW=10.99.0.1
+BREAKOUT_URL="http://$BREAKOUT_GW:8989"
+
 sudo podman build --network=host -t workqueue -f Containerfile.workqueue .
 
 if [ "$PROXY" = true ]; then
@@ -57,19 +65,32 @@ APP_PORT=5000
 
 echo "=== Deploying Container $APP_NAME ($ROLE) ==="
 
+# The sidecar's snapshot handler reaches the host breakout receiver through the
+# breakout bridge, and it shares the app container's network namespace — so the
+# app container gets the breakout bridge attached when (and only when) it
+# carries a sidecar. Mirrors build.sh.
+NETWORK_ARGS=(--network "vlan:ip=$IP")
+if [ "$PROXY" = true ]; then
+    if ! sudo podman network exists "$BREAKOUT_NET"; then
+        echo "[*] Creating breakout network ($BREAKOUT_GW)"
+        sudo podman network create --subnet 10.99.0.0/24 --gateway "$BREAKOUT_GW" "$BREAKOUT_NET"
+    fi
+    NETWORK_ARGS+=(--network "$BREAKOUT_NET")
+fi
+
 # Launch the core application container onto the macvlan network
 echo "[*] Starting App Container: $APP_NAME on IP $IP"
 case "$ROLE" in
     coordinator)
         sudo podman run -d --replace \
           --name "$APP_NAME" \
-          --network vlan:ip=$IP \
+          "${NETWORK_ARGS[@]}" \
           workqueue coordinator "$NODE_NAME" $APP_PORT $W1_IP $APP_PORT $W2_IP $APP_PORT
         ;;
     worker)
         sudo podman run -d --replace \
           --name "$APP_NAME" \
-          --network vlan:ip=$IP \
+          "${NETWORK_ARGS[@]}" \
           workqueue worker "$NODE_NAME" $APP_PORT "${PROC_DELAY_MS:-100}" $COORD_IP $APP_PORT
         ;;
     client)
@@ -78,7 +99,7 @@ case "$ROLE" in
         # so /bin/sleep exists; override the workqueue entrypoint.
         sudo podman run -d --replace \
           --name "$APP_NAME" \
-          --network vlan:ip=$IP \
+          "${NETWORK_ARGS[@]}" \
           --entrypoint "" \
           workqueue sleep infinity
         ;;
@@ -94,6 +115,7 @@ if [ "$PROXY" = true ]; then
       --cap-add NET_ADMIN \
       --sysctl net.ipv4.ip_nonlocal_bind=1 \
       -e MESH_SUBNET="$MESH_SUBNET" \
+      -e BREAKOUT_URL="$BREAKOUT_URL" \
       sidecar
 fi
 

@@ -109,7 +109,8 @@ retransmits and replay-on-restore.
 ## 8. Snapshot integration (no proxy changes)
 
 Identical to token ring — rides `__START_SNAPSHOT__` → `_handle_local_intercept` → marker broadcast
-+ out-of-band CRIU (`:9090/checkpoint`) → per-channel recording into `channel_states` → replay on
++ out-of-band CRIU (`POST /checkpoint-pair` on the host-side breakout receiver,
+`http://10.99.0.1:8989`) → per-channel recording into `channel_states` → replay on
 `_finish_global_snapshot`. The in-flight `JOB` is cached and, on replay, spoof-delivered into the
 restored worker, which processes it through the §6 handler.
 
@@ -180,7 +181,9 @@ is *weaker* than token ring's, and intellectual honesty requires saying why:
 ## 13. Open questions
 
 1. Host CRIU **restore** path — built, or only checkpoint? (Shared prerequisite with any
-   checkpoint-based app.) **Resolved:** `checkpoint_agent.py` + `test/test_workqueue_snapshot.sh` now provide both — see §14.
+   checkpoint-based app.) **Resolved:** the host-side breakout receiver
+   (`proxy/breakout_receiver.py`, `POST /checkpoint-pair` and `/restore`) +
+   `test/test_workqueue_snapshot.sh` now provide both — see §14.
 2. Should clients retain submitted-but-unconfirmed jobs and re-submit on timeout? That re-introduces
    recovery (at the client) — keep clients fire-and-forget to preserve the property, and note it.
 3. Keep `counter` and/or token ring alongside for contrast, or replace?
@@ -188,16 +191,20 @@ is *weaker* than token ring's, and intellectual honesty requires saying why:
 ## 14. Running the experiment (M2-M6 harness)
 
 Three pieces implement §9/§11: `build_workqueue.sh` (per-node deploy, mirrors `build.sh`),
-`checkpoint_agent.py` (the host-side CRIU agent behind `:9090`, §8), and
-`test/test_workqueue_snapshot.sh` (the M6 driver).
+`proxy/breakout_receiver.py` (the host-side CRIU agent behind the breakout bridge gateway
+`10.99.0.1:8989`, §8 — its `POST /checkpoint-pair` checkpoints the app+sidecar pair), and
+`test/test_workqueue_snapshot.sh` (the M6 driver, which starts the receiver itself).
 
 **Per-host prerequisites**
 
 - podman with working CRIU checkpoint/restore (`podman container checkpoint` succeeds).
 - The `vlan` macvlan network exists (carries the `10.24.24.0/24` mesh, as in `build.sh`).
-- The agent is running as root: `sudo python3 checkpoint_agent.py` — it serves
-  `POST /checkpoint` on `0.0.0.0:9090` (sidecars reach it via `host.containers.internal`);
-  sanity-check with `curl localhost:9090/health` → `ok`.
+- The `breakout` bridge network exists (subnet `10.99.0.0/24`, gateway `10.99.0.1`); the
+  deploy/harness create it on demand. The macvlan apps cannot route to the host directly, so
+  the sidecars reach the receiver over this bridge.
+- The receiver is running as root: `sudo python3 proxy/breakout_receiver.py` — it serves
+  `POST /checkpoint-pair` (and `/checkpoint`, `/restore`, `/stop`, `/health`) on the breakout
+  gateway `10.99.0.1:8989`; sanity-check with `curl http://10.99.0.1:8989/health` → `{"ok": true}`.
 - The proxy on this branch must carry the snapshot-path port (markers framed with the 17-byte
   `!BQHH4s` tunnel header, 6-arg replay; branch `bug-hunt-claude-screen`, commit `aa6fc62`)
   **and** a fix for the still-open S7 replay bug (recorded in-flight messages dropped because

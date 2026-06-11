@@ -14,10 +14,10 @@
 #
 # !!! SINGLE-HOST ASSUMPTION (read this) !!!
 # This driver assumes ALL FOUR node pairs (workqueue-a/sidecar-a .. workqueue-d/sidecar-d)
-# run on THIS EC2 host, on this host's `vlan` macvlan network, with the checkpoint agent
-# (sudo python3 checkpoint_agent.py) listening on localhost:9090 and exporting to
-# /tmp/snapshots/. Multi-host topologies (per-node deploy + per-host agent) are out of scope
-# for this script. Run as root (sudo).
+# run on THIS EC2 host, on this host's `vlan` macvlan network, with the breakout receiver
+# (sudo python3 proxy/breakout_receiver.py) listening on the breakout bridge gateway
+# 10.99.0.1:8989 and exporting to /tmp/snapshots/. Multi-host topologies (per-node deploy +
+# per-host receiver) are out of scope for this script. Run as root (sudo).
 #
 # Topology (fixed, matches build_workqueue.sh defaults):
 #   a = coordinator 10.24.24.10    b = worker 10.24.24.11
@@ -43,6 +43,13 @@ COORD_IP=10.24.24.10
 W1_IP=10.24.24.11
 W2_IP=10.24.24.12
 MESH_SUBNET="10.24.24.0/24"
+
+# Host-side breakout receiver (proxy/breakout_receiver.py): the sidecars POST
+# /checkpoint-pair here; it exports the app+sidecar cut under /tmp/snapshots/.
+BREAKOUT_NET=breakout
+BREAKOUT_GW=10.99.0.1
+BREAKOUT_PORT=8989
+BREAKOUT_URL="http://$BREAKOUT_GW:$BREAKOUT_PORT"
 
 CLIENT=workqueue-d
 APPS="workqueue-a workqueue-b workqueue-c workqueue-d"
@@ -192,6 +199,7 @@ fresh_sidecars() {
             --cap-add NET_ADMIN \
             --sysctl net.ipv4.ip_nonlocal_bind=1 \
             -e MESH_SUBNET="$MESH_SUBNET" \
+            -e BREAKOUT_URL="$BREAKOUT_URL" \
             sidecar >/dev/null || die "failed to launch fresh sidecar-$x"
     done
 }
@@ -200,9 +208,29 @@ fresh_sidecars() {
 phase "PHASE 0: preflight"
 
 podman network exists vlan || die "podman network 'vlan' does not exist (create the macvlan network first)"
-curl -fsS http://localhost:9090/health >/dev/null \
-    || die "checkpoint agent not answering on localhost:9090 — run: sudo python3 $ROOT/checkpoint_agent.py"
-echo "[*] vlan network present, checkpoint agent healthy."
+
+# The breakout bridge must exist before the receiver can bind its gateway and
+# before --deploy attaches it to the app containers.
+if ! podman network exists "$BREAKOUT_NET"; then
+    echo "[*] Creating breakout network ($BREAKOUT_GW)"
+    podman network create --subnet 10.99.0.0/24 --gateway "$BREAKOUT_GW" "$BREAKOUT_NET" \
+        || die "failed to create breakout network"
+fi
+
+# Start the host-side breakout receiver if it isn't already answering. It binds
+# the breakout gateway with IP_FREEBIND, so it can come up before any container
+# attaches the bridge.
+if ! curl -fsS "$BREAKOUT_URL/health" >/dev/null 2>&1; then
+    echo "[*] Starting breakout receiver on $BREAKOUT_URL"
+    python3 "$ROOT/proxy/breakout_receiver.py" --host "$BREAKOUT_GW" --port "$BREAKOUT_PORT" &
+    for _ in $(seq 1 10); do
+        curl -fsS "$BREAKOUT_URL/health" >/dev/null 2>&1 && break
+        sleep 0.5
+    done
+fi
+curl -fsS "$BREAKOUT_URL/health" >/dev/null \
+    || die "breakout receiver not answering on $BREAKOUT_URL — run: sudo python3 $ROOT/proxy/breakout_receiver.py --host $BREAKOUT_GW --port $BREAKOUT_PORT"
+echo "[*] vlan + breakout networks present, breakout receiver healthy."
 
 # Proxy prerequisite gate (checks the SOURCE tree; rebuild images via --deploy after porting).
 # The experiment timeline is impossible on the unported snapshot handler: it broadcasts markers

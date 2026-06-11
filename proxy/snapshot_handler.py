@@ -9,10 +9,9 @@ from config import TUNNEL_PORT, SNAPSHOT_TIMEOUT
 
 
 BREAKOUT_URL = os.environ.get("BREAKOUT_URL", "http://10.99.0.1:8989")
-# The container to CRIU-checkpoint. Must be set to the *app* container id: the
-# sidecar shares the app's network namespace but not its UTS, so gethostname()
-# returns the sidecar's own id, which is the wrong target.
-CHECKPOINT_TARGET = os.environ.get("CHECKPOINT_TARGET")
+# The pair checkpoint resolves the (app, sidecar) pair from the caller's own
+# container name on the host, so the sidecar only needs to POST its own
+# hostname -- no CHECKPOINT_TARGET env is required anymore.
 
 class SnapshotController:
     def __init__(self, proxy_instance):
@@ -108,30 +107,37 @@ class SnapshotController:
 
     def _trigger_app_snapshot_out_of_band(self, snapshot_id):
         """
-        Ask the host's breakout receiver to CRIU-checkpoint this container.
+        Ask the host's breakout receiver to CRIU-checkpoint the app+sidecar PAIR.
+
+        We POST our own sidecar hostname as caller_id; the receiver's
+        /checkpoint-pair resolves the (app, sidecar) pair from it and
+        checkpoints the app FIRST, then this sidecar -- while this very HTTP
+        request blocks, so the pair cut is mutually consistent (the work-queue
+        snapshot correctness requirement). Exports land under
+        /tmp/snapshots/<snapshot_id>/.
 
         Any failure here is logged but swallowed so it cannot brick the
         controller (an escape would leave is_snapshotting=True and drop every
         future marker as stale). A swallowed failure means NO app checkpoint
         was taken for this snapshot -- hence the loud marker.
         """
-        container_id = CHECKPOINT_TARGET or socket.gethostname()
+        caller_id = socket.gethostname()
 
         # Catch everything, including ValueError from a malformed BREAKOUT_URL
         # at Request() construction and http.client.HTTPException from urlopen.
         try:
             payload = json.dumps({
-                "target_id": container_id,
-                "export_path": f"/tmp/{snapshot_id}.tar.zst",
+                "caller_id": caller_id,
+                "snapshot_id": snapshot_id,
             }).encode("utf-8")
             request = urllib.request.Request(
-                f"{BREAKOUT_URL}/checkpoint",
+                f"{BREAKOUT_URL}/checkpoint-pair",
                 data=payload,
                 headers={"Content-Type": "application/json"},
             )
             with urllib.request.urlopen(request, timeout=120):
                 pass
-            print(f"[*] Host checkpointed {container_id} (snapshot {snapshot_id})")
+            print(f"[*] Host checkpointed pair for {caller_id} (snapshot {snapshot_id})")
         except Exception as e:
             print(f"[!] CHECKPOINT FAILED for snapshot {snapshot_id} "
                   f"({type(e).__name__}: {e}); no app state was saved")
