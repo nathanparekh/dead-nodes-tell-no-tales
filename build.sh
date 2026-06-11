@@ -72,6 +72,7 @@ if [ "$PROXY" = true ]; then
       --sysctl net.ipv4.ip_nonlocal_bind=1 \
       -e MESH_SUBNET="$MESH_SUBNET" \
       -e BREAKOUT_URL="$BREAKOUT_URL" \
+      -e CHECKPOINT_TARGET="$APP_NAME" \
       sidecar
 
     sudo podman logs -f $SIDECAR_NAME

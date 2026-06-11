@@ -52,6 +52,7 @@ if [ "$PROXY" = true ]; then
     --network "container:test-container" \
     --cap-add NET_ADMIN \
     -e MESH_SUBNET="$MESH_SUBNET" \
+    -e CHECKPOINT_TARGET="test-container" \
     sidecar
 fi
 

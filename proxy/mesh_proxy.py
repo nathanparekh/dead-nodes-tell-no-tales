@@ -238,6 +238,7 @@ class MeshProxy:
     async def _retransmit_loop(self):
         while True:
             now = time.time()
+            self.snapshot_ctrl.check_timeout()
             for ip, peer in self.peers.items():
                 for seq, (timestamp, packet) in list(peer.unacked.items()):
                     if now - timestamp > RETRY_TIMEOUT:
