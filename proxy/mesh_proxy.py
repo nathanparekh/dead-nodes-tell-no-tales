@@ -39,31 +39,6 @@ class TunnelProtocol(asyncio.DatagramProtocol):
         remote_ip = addr[0]
         peer = self.proxy.get_peer(remote_ip)
 
-        # --- PROBE HANDSHAKE LOGIC ---
-        if data == b"__PROBE__":
-            print(f"[*] [TUNNEL] Received PROBE from {remote_ip}. Sending ACK.")
-            self.proxy.tunnel_transport.sendto(b"__PROBE_ACK__", addr)
-            return
-
-        if data == b"__PROBE_ACK__":
-            print(f"[*] [TUNNEL] Received PROBE_ACK from {remote_ip}!")
-            if self.proxy.routing_table.get(remote_ip) == "PROBING":
-                print(f"[*] Received ACK from {remote_ip}. Upgraded to MESH node.")
-                self.proxy.routing_table[remote_ip] = "MESH"
-                for payload, src_ip, src_port, dst_port in self.proxy.probe_buffer.pop(
-                    remote_ip, []
-                ):
-                    target_ip_bytes = socket.inet_aton(remote_ip)
-                    # Header: Type(1) + Seq(8) + SrcPort(2) + DstPort(2) + TargetIP(4) = 17 bytes
-                    header = struct.pack(
-                        "!BQHH4s", 0, peer.send_seq, src_port, dst_port, target_ip_bytes
-                    )
-                    packet = header + payload
-                    self.proxy.tunnel_transport.sendto(packet, (remote_ip, TUNNEL_PORT))
-                    peer.unacked[peer.send_seq] = (time.time(), packet)
-                    peer.send_seq += 1
-            return
-
         # --- HEADER PROTECTION ---
         if len(data) < 5:
             return
@@ -144,9 +119,7 @@ class MeshProxy:
         self.local_sock = None
         self.snapshot_ctrl = SnapshotController(self)
 
-        self.routing_table = {}
-        self.probe_buffer = {}
-        self.last_probe_time = {}
+        # Removed: routing_table, probe_buffer, last_probe_time
         self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)
 
     def get_peer(self, ip):
@@ -184,28 +157,11 @@ class MeshProxy:
         self, current_seq, p, ip, src_port, dst_port, target_local_ip
     ):
         consumed = self.snapshot_ctrl.process_message(
-            ip, current_seq, p, src_port, dst_port
+            ip, current_seq, p, src_port, dst_port, target_local_ip
         )
         if not consumed:
             spoof_sock = self.get_spoof_sock(ip, src_port)
             spoof_sock.sendto(p, (target_local_ip, dst_port))
-
-    async def _probe_target(self, target_ip):
-        print(f"[*] Probing {target_ip} for proxy sidecar...")
-        if self.tunnel_transport:
-            self.tunnel_transport.sendto(b"__PROBE__", (target_ip, TUNNEL_PORT))
-
-        await asyncio.sleep(0.1)
-
-        if self.routing_table.get(target_ip) == "PROBING":
-            print(f"[*] Probe to {target_ip} timed out. Marking as EXTERNAL.")
-            self.routing_table[target_ip] = "EXTERNAL"
-
-            for data, src_ip, src_port, dst_port in self.probe_buffer.pop(
-                target_ip, []
-            ):
-                spoof_sock = self.get_spoof_sock(src_ip, src_port)
-                spoof_sock.sendto(data, (target_ip, dst_port))
 
     async def start(self):
         loop = asyncio.get_running_loop()
@@ -237,7 +193,7 @@ class MeshProxy:
                     snapshot_id = str(uuid.uuid4()).encode()
                     marker_payload = b"__MARKER__:" + snapshot_id
                     self.snapshot_ctrl.process_message(
-                        "127.0.0.1", 0, marker_payload, 0, 0
+                        "127.0.0.1", 0, marker_payload, 0, 0, "127.0.0.1"
                     )
                     continue
 
@@ -253,35 +209,9 @@ class MeshProxy:
                         break
 
                 if target_ip and target_port:
-                    state = self.routing_table.get(target_ip)
-                    last_probe = self.last_probe_time.get(target_ip, 0)
-
-                    if state is None or (
-                        state == "EXTERNAL"
-                        and time.time() - last_probe > PROBE_COOLDOWN
-                    ):
-                        if ipaddress.ip_address(target_ip) in self.mesh_network:
-                            print(
-                                f"[*] {target_ip} is in mesh subnet. Initiating probe..."
-                            )
-                            self.routing_table[target_ip] = "PROBING"
-                            self.last_probe_time[target_ip] = time.time()
-                            self.probe_buffer[target_ip] = [
-                                (data, orig_src_ip, orig_src_port, target_port)
-                            ]
-                            asyncio.create_task(self._probe_target(target_ip))
-                        else:
-                            self.routing_table[target_ip] = "EXTERNAL"
-                            self.last_probe_time[target_ip] = time.time()
-                            spoof_sock = self.get_spoof_sock(orig_src_ip, orig_src_port)
-                            spoof_sock.sendto(data, (target_ip, target_port))
-
-                    elif state == "PROBING":
-                        self.probe_buffer[target_ip].append(
-                            (data, orig_src_ip, orig_src_port, target_port)
-                        )
-
-                    elif state == "MESH":
+                    # DIRECT ROUTING LOGIC (No probing)
+                    if ipaddress.ip_address(target_ip) in self.mesh_network:
+                        # ASSUME PROXY EXISTS: Wrap and send via tunnel
                         peer = self.get_peer(target_ip)
                         target_ip_bytes = socket.inet_aton(target_ip)
                         # Header: Type(1) + Seq(8) + SrcPort(2) + DstPort(2) + TargetIP(4) = 17 bytes
@@ -297,8 +227,8 @@ class MeshProxy:
                         self.tunnel_transport.sendto(packet, (target_ip, TUNNEL_PORT))
                         peer.unacked[peer.send_seq] = (time.time(), packet)
                         peer.send_seq += 1
-
-                    elif state == "EXTERNAL":
+                    else:
+                        # OUTSIDE SUBNET: Handle normally (direct spoofed send)
                         spoof_sock = self.get_spoof_sock(orig_src_ip, orig_src_port)
                         spoof_sock.sendto(data, (target_ip, target_port))
 
@@ -308,6 +238,7 @@ class MeshProxy:
     async def _retransmit_loop(self):
         while True:
             now = time.time()
+            self.snapshot_ctrl.check_timeout()
             for ip, peer in self.peers.items():
                 for seq, (timestamp, packet) in list(peer.unacked.items()):
                     if now - timestamp > RETRY_TIMEOUT:
