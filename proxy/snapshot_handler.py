@@ -8,6 +8,8 @@ import socket
 from config import TUNNEL_PORT
 
 
+BREAKOUT_URL = os.environ.get("BREAKOUT_URL", "http://10.99.0.1:8989")
+
 class SnapshotController:
     def __init__(self, proxy_instance):
         self.proxy = proxy_instance
@@ -92,11 +94,33 @@ class SnapshotController:
 
     def _trigger_app_snapshot_out_of_band(self, snapshot_id):
         """
-        Use CRIU to snapshot the application.
+        Ask the host's breakout receiver to CRIU-checkpoint this container.
+
+        Any failure here is logged but swallowed so it cannot brick the
+        controller (an escape would leave is_snapshotting=True and drop every
+        future marker as stale). A swallowed failure means NO app checkpoint
+        was taken for this snapshot -- hence the loud marker.
         """
         container_id = socket.gethostname()
 
-        with open("pipe", "w") as p: p.write(f"{container_id} {snapshot_id}\n")
+        # Catch everything, including ValueError from a malformed BREAKOUT_URL
+        # at Request() construction and http.client.HTTPException from urlopen.
+        try:
+            payload = json.dumps({
+                "target_id": container_id,
+                "export_path": f"/tmp/{snapshot_id}.tar.zst",
+            }).encode("utf-8")
+            request = urllib.request.Request(
+                f"{BREAKOUT_URL}/checkpoint",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=120):
+                pass
+            print(f"[*] Host checkpointed {container_id} (snapshot {snapshot_id})")
+        except Exception as e:
+            print(f"[!] CHECKPOINT FAILED for snapshot {snapshot_id} "
+                  f"({type(e).__name__}: {e}); no app state was saved")
 
     def _finish_global_snapshot(self):
         print("[*] Global Snapshot Complete! Flushing all cached channels...")
