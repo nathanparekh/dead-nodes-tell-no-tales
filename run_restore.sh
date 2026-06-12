@@ -13,10 +13,9 @@
 set -u
 
 BREAKOUT_URL="${BREAKOUT_URL:-http://10.99.0.1:8989}"
-# Pair-checkpoint tarball layout written by the breakout receiver's
-# /checkpoint-pair: $SNAP_DIR/<snapshot_id>/tokenring-<node>.tar.zst. Keep in
-# sync with proxy/breakout_receiver.py's SNAP_DIR (default /tmp/snapshots).
-SNAP_DIR="${SNAP_DIR:-/tmp/snapshots}"
+# Artifact CRIU-image layout written by the app's snapshot handler via the
+# receiver's /checkpoint: /tmp/snapshot-<snapshot_id>-tokenring-<node>.tar.zst
+# (export filename = /tmp/snapshot-<id>-<CHECKPOINT_TARGET>.tar.zst).
 
 SNAPSHOT_ID="${1:-}"
 if [ -z "$SNAPSHOT_ID" ]; then
@@ -112,11 +111,11 @@ for node in "${NODES[@]}"; do
 done
 
 # Step 2: restore each app from its CRIU image. HOST paths -- this caller never
-# sees the tarballs. The pair-checkpoint flow writes them under
-# $SNAP_DIR/<snapshot_id>/tokenring-<node>.tar.zst.
+# sees the tarballs. The app's snapshot handler exports them to
+# /tmp/snapshot-<snapshot_id>-tokenring-<node>.tar.zst on each node's host.
 echo "Restoring apps from their CRIU images."
 for node in "${NODES[@]}"; do
-    breakout restore "{\"target_path\": \"$SNAP_DIR/$SNAPSHOT_ID/tokenring-$node.tar.zst\"}"
+    breakout restore "{\"target_path\": \"/tmp/snapshot-$SNAPSHOT_ID-tokenring-$node.tar.zst\"}"
 done
 
 # Step 3: let each restored app finish coming up and start listening before its

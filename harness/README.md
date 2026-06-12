@@ -14,33 +14,39 @@ If (a) passes and (b) fails, the checkpoint provably depends on the proxy's chan
 
 | file | runs where | purpose |
 |---|---|---|
-| `../proxy/breakout_receiver.py` | each host, as root | HTTP `10.99.0.1:8989`; `POST /checkpoint-pair` atomically CRIU-checkpoints the app **and** sidecar (`--leave-running`) into `$SNAP_DIR/<sid>/` and flips a `latest` symlink |
-| `node_ctl.sh` | each host, as root (piped over ssh) | per-host ops: start/health-check the receiver, netem on/off, kill, restore, fetch channel JSON, trigger snapshot |
+| `../proxy/breakout_receiver.py` | each host, as root | HTTP `10.99.0.1:8989`; podman lifecycle API. The app's snapshot handler drives `POST /checkpoint` (CRIU image, `--leave-running`) and `POST /snapshot_state` (channel-state cut) per node; restore uses `POST /restore` + `POST /run_sidecar` (restore-mode sidecar) |
+| `node_ctl.sh` | each host, as root (piped over ssh) | per-host ops: start/health-check the receiver, netem on/off, kill, restore, trigger snapshot |
 | `wait_inflight.py` | inside a vlan container | exits 0 the moment the token is committed to the A->B wire |
-| `replay_channels.py` | inside a vlan container | re-sends recorded in-flight messages into a restored node |
 | `demo_token_ring.sh` | one host (the driver) | the whole experiment, stages 1–9 |
 
-## Four small proxy changes (and why the demo needs them)
+## The artifact snapshot/restore flow (and why the demo needs it)
 
-1. **Channel-state persistence.** `_finish_global_snapshot` replays recorded in-flight
-   messages into the *live* app and then **clears** `channel_states` — replay-then-clear
-   consumes the recording. Our demo kills the containers after the snapshot, so the
-   in-memory copy is gone exactly when we need it. The patch dumps the recording to
-   `/tmp/channel_states_<sid>.json` inside the sidecar *before* replaying (always, even
-   when empty). That JSON is the only durable copy the harness can replay after restore.
-2. **Breakout bridge for the host call.** The sidecar POSTs its pair-checkpoint to the
-   host's breakout receiver at `http://10.99.0.1:8989/checkpoint-pair`. The host is
+Restore is **artifact-based** (main's snapshot/restore system). A snapshot, keyed by a
+caller-chosen `snapshot_id`, writes per node two files to `/tmp` on that node's own host:
+`/tmp/snapshot-<sid>-tokenring-<x>.tar.zst` (the app's CRIU image) and
+`/tmp/snapshot-<sid>-tokenring-<x>.json` (its Chandy-Lamport channel-state cut). The
+channel cut — per-peer `send_seq`/`recv_seq` plus the recorded in-flight messages — is the
+durable copy of the recording, so the demo can kill the containers and still replay later.
+
+Restore CRIU-restores each app, then starts a **restore-mode sidecar** (the receiver's
+`/run_sidecar`, which sets `RESTORE_SNAPSHOT_ID=<sid>` and `CHECKPOINT_TARGET=tokenring-<x>`).
+That sidecar's `restore_from_artifact()` GETs `/snapshot/<sid>`, finds this node's entry,
+seeds the per-peer seqs, and replays the recorded channel into the restored app **once** in
+seq order before serving live traffic. The CRIU-only control instead starts a *plain*
+sidecar (no `RESTORE_SNAPSHOT_ID`), so nothing is replayed and the ring violates.
+
+Two supporting pieces:
+
+1. **Breakout bridge for the host call.** The sidecar POSTs to the host's breakout receiver
+   at `http://10.99.0.1:8989`. The host is
    unreachable by name from a macvlan child interface, so `build_tokenring.sh` attaches a
    dedicated podman bridge network `breakout` (subnet 10.99.0.0/24, gateway 10.99.0.1) to
    any app container that carries a sidecar and passes `-e BREAKOUT_URL` to the sidecar.
    The receiver binds the gateway IP (IP_FREEBIND) so the bridge is the reachable path.
-3. **Marker wire-framing fix.** Markers are now sent with the same 17-byte header as
-   data packets (`!BQHH4s`); the old 9-byte header was unparseable by the receiving
-   tunnel, so no snapshot could ever complete.
-4. **Markers go to ALL peers** (textbook Chandy-Lamport), including back to the peer the
-   marker came from. With the old "all except sender" rule the initiator — whose marker
-   reaches both other nodes first — never got a marker back, never terminated, never
-   wrote its channel JSON, and silently consumed every later message on its recorded
+2. **Markers go to ALL peers** (textbook Chandy-Lamport), including back to the peer the
+   marker came from. With an "all except sender" rule the initiator — whose marker
+   reaches both other nodes first — never gets a marker back, never terminates, never
+   writes its channel artifact, and silently consumes every later message on its recorded
    channels (killing the live ring after a snapshot).
 
 ## Prerequisites
@@ -66,7 +72,7 @@ calls it for you on every host. To do it by hand:
 
 ```sh
 # from a repo checkout on each host (idempotent; logs to /var/log/breakout_receiver.log)
-sudo SNAP_DIR=/tmp/snapshots bash harness/node_ctl.sh receiver-up
+sudo bash harness/node_ctl.sh receiver-up
 curl -sf 10.99.0.1:8989/health        # -> {"ok": true}
 
 # after deploying (next section), confirm the SIDECAR can reach the receiver:
@@ -76,8 +82,8 @@ sudo podman exec sidecar-<x> wget -qO- http://10.99.0.1:8989/health
 `build_tokenring.sh` attaches the `breakout` bridge to each sidecar-carrying app container
 and passes `-e BREAKOUT_URL=http://10.99.0.1:8989`, so the sidecar reaches the host over
 the bridge (a macvlan child interface cannot reach the parent host directly — that is the
-whole reason for the breakout bridge). `node_ctl.sh`'s `sidecar-up` passes the same
-`BREAKOUT_URL` so restored sidecars keep that path.
+whole reason for the breakout bridge). The receiver's `run_sidecar` (used by
+`node_ctl.sh restore`) passes the same `BREAKOUT_URL` so restored sidecars keep that path.
 
 ## Deploy the ring
 
@@ -106,7 +112,7 @@ export B_SSH="ssh ubuntu@172.31.32.239" C_SSH="ssh ubuntu@172.31.47.64"   # driv
 ```
 
 Knobs (env): `A_IP/B_IP/C_IP` (10.24.24.10/.11/.12), `PORT=5000`, `NETEM_MS=5000`,
-`LOSS_TIMEOUT_MS=60000` (must match deployment), `SNAP_DIR=/tmp/snapshots`,
+`LOSS_TIMEOUT_MS=60000` (must match deployment),
 `VERIFY_ROUNDS=30`, `BREAKOUT_GW=10.99.0.1` (receiver on port 8989).
 
 `NETEM_MS` is the race the whole demo hinges on: the delayed token must still be on the
@@ -132,15 +138,19 @@ Milestone ladder (plan §11):
 3. **position + trigger** — `wait_inflight` watches A and B; the instant the token is on
    the A->B wire, `T_SNAP` is recorded (the loss-timer baseline) and C (the node
    "behind" the token) sends `__START_SNAPSHOT__`.
-4. **collect** — polls until one snapshot id has checkpoint tarballs on all 3 hosts, then
-   netem-off, fetches each sidecar's channel JSON (polling B's briefly — it appears only
-   once A's netem-delayed marker lands).
-5. **bite check** — B's JSON must contain a recorded `TOKEN ...` payload, i.e. the token
-   was captured as *channel state*, invisible to CRIU. Aborts (ring left running) if not.
+4. **collect** — polls (`has-snapshot`) until every node's CRIU image **and** channel-state
+   cut (`/tmp/snapshot-<sid>-tokenring-<x>.{tar.zst,json}`) exist on all 3 hosts, then
+   netem-off and reads each node's channel-cut JSON (B's appears only once A's
+   netem-delayed marker lands, so it is the last to complete).
+5. **bite check** — B's cut must contain a recorded `TOKEN ...` payload (in some peer's
+   `channel`), i.e. the token was captured as *channel state*, invisible to CRIU. Aborts
+   (ring left running) if not.
 6. **kill** — `podman rm -f` all six containers.
-7. **restore (a)** — restore all apps from the tarballs, restart sidecars, replay each
-   node's channel JSON at its mesh IP; `verify` -> expect **PASS**; kill again.
-8. **restore (b)** — restore only, no replay; wait out `LOSS_TIMEOUT_MS` (+5s grace);
+7. **restore (a)** — restore all apps from their CRIU images, then start restore-mode
+   sidecars (`RESTORE_SNAPSHOT_ID=<sid>`) which replay each node's recorded channel from
+   its artifact; `verify` -> expect **PASS**; kill again.
+8. **restore (b)** — restore the CRIU images, bring up *plain* sidecars (no replay); wait
+   out `LOSS_TIMEOUT_MS` (+5s grace);
    nodes regenerate a stale-epoch token; `verify` -> expect **FAIL** (duplicate epoch).
 9. **summary** — expected-vs-got table; exit 0 iff every executed restore matched.
 
@@ -164,16 +174,19 @@ with `build_tokenring.sh` (token-less nodes first) afterwards.
   `10.99.0.1:8989/health`, and re-run the `wget` reachability test from the setup section
   (the app container must have the `breakout` bridge attached — `build_tokenring.sh` does
   this only when a sidecar is deployed).
-- **`node_ctl.sh sidecar-up` on a live (non-restored) node**: don't. The old sidecar's
+- **Starting a fresh sidecar on a live (non-restored) node**: don't. The old sidecar's
   TPROXY rules live in the *app's* netns and survive `podman rm -f sidecar-x`, so the
   replacement exits at boot (`ip route add ... File exists`) and the node goes dark on
-  the mesh while `podman run -d` still reports success. `sidecar-up` is only valid right
-  after `restore` (fresh netns); to recycle a live node's sidecar, redeploy the node.
+  the mesh while `podman run -d` still reports success. `node_ctl.sh restore` /
+  `restore-criu-only` start a sidecar only right after a CRIU restore (fresh netns); to
+  recycle a live node's sidecar, redeploy the node.
 - **criu/podman notes**: checkpoint/restore needs root podman and criu installed
   (`sudo podman container checkpoint --leave-running ...` must work by hand, cf.
   `cmds.sh`). `--leave-running` is required — a stop-checkpoint tears down the app's
   netns mid-marker, killing the sidecar's snapshot protocol. Restore keeps the
   container's name and IP; `node_ctl.sh restore` removes any same-named container first.
-- **Artifacts**: checkpoint tarballs at `$SNAP_DIR/<sid>/tokenring-<x>.tar.zst` on each
-  host; the authoritative channel dump at `/tmp/channel_states_<sid>.json` inside each
-  sidecar (the driver fetches copies into a temp dir it deletes on exit).
+- **Artifacts**: per node, on its own host, the app's snapshot handler writes the CRIU
+  image at `/tmp/snapshot-<sid>-tokenring-<x>.tar.zst` and the channel-state cut at
+  `/tmp/snapshot-<sid>-tokenring-<x>.json` (the receiver serves the cut via
+  `GET /snapshot/<sid>`; the restore-mode sidecar reads it back to replay). The driver
+  also copies each cut into a temp dir it deletes on exit (for the bite check).

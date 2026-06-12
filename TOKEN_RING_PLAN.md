@@ -111,8 +111,8 @@ Rides the existing mechanism end to end:
 
 1. A node sends `__START_SNAPSHOT__` to a mesh peer → its sidecar's `_handle_local_intercept`
    catches it → `SnapshotController.process_message` sets `is_snapshotting`, fires the out-of-band
-   CRIU dump (`_trigger_app_snapshot_out_of_band` → breakout receiver `10.99.0.1:8989/checkpoint-pair`,
-   which checkpoints the app+sidecar pair), and broadcasts markers to peers.
+   CRIU dump (`_trigger_app_snapshot_out_of_band` → breakout receiver `10.99.0.1:8989/checkpoint`,
+   which checkpoints the app container), and broadcasts markers to peers.
 2. Each sidecar records messages arriving on a channel after its own state until that channel's
    marker arrives — i.e. the in-flight `TOKEN` is cached in `channel_states`.
 3. On `_finish_global_snapshot`, recorded messages are replayed (spoof-delivered) into the
@@ -217,7 +217,7 @@ tokenring verify   N  A_HOST A_PORT  B_HOST B_PORT  C_HOST C_PORT
 ## 14. Open questions
 
 1. Is the host CRIU **restore** path already built, or only checkpoint
-   (`10.99.0.1:8989/checkpoint-pair`)? The demo needs restore; if it's missing, that's a
+   (`10.99.0.1:8989/checkpoint` + `/restore`)? The demo needs restore; if it's missing, that's a
    prerequisite shared with any checkpoint-based app.
 2. Should `verify` read channel state directly (tighter, but reaches into the proxy) or stay purely
    app-level via post-replay `STATUS` (cleaner, recommended)?

@@ -5,15 +5,23 @@
 # Or piped over ssh:  <ssh-prefix> sudo bash -s -- <cmd> <args...>  < harness/node_ctl.sh
 #
 # It is self-contained: no other files needed on the remote host.
+#
+# Restore is artifact-based (main's snapshot/restore system): a snapshot writes,
+# per node, a CRIU image and a channel-state cut keyed by snapshot_id, both under
+# /tmp on the node's own host:
+#   /tmp/snapshot-<sid>-tokenring-<suffix>.tar.zst   app CRIU image
+#   /tmp/snapshot-<sid>-tokenring-<suffix>.json      channel-state cut
+# A restore CRIU-restores the app, then starts a FRESH restore-mode sidecar (via
+# the receiver's /run_sidecar, RESTORE_SNAPSHOT_ID=<sid>) which loads this node's
+# artifact and replays the recorded channel before serving live traffic. There is
+# no on-disk channel dump and no `latest` symlink -- restore is driven entirely by
+# snapshot_id.
 set -u
 
-# The breakout receiver writes pair-checkpoints under SNAP_DIR/<sid>/ and keeps
-# a `latest` symlink there. Keep this in sync with proxy/breakout_receiver.py's
-# SNAP_DIR (default /tmp/snapshots).
-SNAP_DIR=${SNAP_DIR:-/tmp/snapshots}
 BREAKOUT_NET=breakout
 BREAKOUT_GW=10.99.0.1
 BREAKOUT_URL="http://$BREAKOUT_GW:8989"
+MESH_SUBNET=10.24.24.0/24
 
 usage() {
     cat <<'EOF'
@@ -22,34 +30,17 @@ Usage: node_ctl.sh <cmd> [args...]   (run as root; suffix is a|b|c)
   receiver-health                         exit 0 iff the breakout receiver answers /health
   netem-on <suffix> <dst_ip> <delay_ms>   delay packets to dst_ip inside sidecar-<suffix>
   netem-off <suffix>                      remove the netem qdisc
-  latest-snapshot                         newest snapshot id under SNAP_DIR (or empty)
-  has-checkpoint <suffix> <sid>           exit 0 iff the checkpoint tarball exists
-  fetch-channels <suffix> <sid>           print channel-state JSON from the sidecar ("{}" if missing)
+  has-snapshot <suffix> <sid>             exit 0 iff this node's CRIU image + artifact json exist for <sid>
   kill <suffix>                           remove app + sidecar containers
-  restore <suffix> <sid>                  restore app from checkpoint, then restart sidecar
-  sidecar-up <suffix>                     start the sidecar in the app's netns (only valid right
-                                          after restore: a live app's netns still holds the old
-                                          sidecar's TPROXY rules, so a replacement exits at boot)
-  trigger-snapshot <suffix> <peer_ip>     ask the app to start a Chandy-Lamport snapshot
+  restore <suffix> <sid>                  CRIU-restore the app, then start a restore-mode sidecar
+                                          (RESTORE_SNAPSHOT_ID=<sid>) that replays the recorded channel
+  restore-criu-only <suffix> <sid>        CRIU-restore the app, then start a PLAIN live sidecar (no
+                                          RESTORE_SNAPSHOT_ID) -- the control: memory only, NO replay
+  trigger-snapshot <suffix> <sid>         start a Chandy-Lamport snapshot keyed by <sid> from this node
+                                          (drives the receiver's /snapshot_trigger)
   ps                                      list tokenring-*/sidecar-* containers
 EOF
     exit 1
-}
-
-# Same run line as build_tokenring.sh, minus the blocking "podman logs -f".
-# The restored app keeps its breakout-net attachment, and the sidecar shares its
-# netns, so passing BREAKOUT_URL is all the restored sidecar needs to reach the
-# host receiver again.
-sidecar_up() {
-    podman rm -f "sidecar-$1"
-    podman run -d \
-      --name "sidecar-$1" \
-      --network "container:tokenring-$1" \
-      --cap-add NET_ADMIN \
-      --sysctl net.ipv4.ip_nonlocal_bind=1 \
-      -e MESH_SUBNET=10.24.24.0/24 \
-      -e BREAKOUT_URL="$BREAKOUT_URL" \
-      sidecar
 }
 
 # Find proxy/breakout_receiver.py relative to this script if it sits in a repo
@@ -69,13 +60,38 @@ receiver_up() {
     fi
     [ -f "$RECEIVER_PY" ] || { echo "missing $RECEIVER_PY (run from a repo checkout)" >&2; return 1; }
     echo "[*] starting breakout receiver on $BREAKOUT_URL" >&2
-    SNAP_DIR="$SNAP_DIR" nohup python3 "$RECEIVER_PY" --host "$BREAKOUT_GW" --port 8989 \
+    nohup python3 "$RECEIVER_PY" --host "$BREAKOUT_GW" --port 8989 \
+        --mesh-subnet "$MESH_SUBNET" \
         >/var/log/breakout_receiver.log 2>&1 &
     sleep 1
 }
 
 receiver_health() {
     curl -sf "http://$BREAKOUT_GW:8989/health" >/dev/null
+}
+
+# breakout <endpoint> <json-body> -- POST to the local breakout receiver.
+breakout() {
+    curl -fsS --max-time 150 -X POST -H "Content-Type: application/json" \
+        -d "$2" "$BREAKOUT_URL/$1"
+}
+
+# sidecar_up <suffix> -- start a PLAIN live sidecar in the app's netns (same run
+# line as build_tokenring.sh, minus the blocking `podman logs -f`, and with NO
+# RESTORE_SNAPSHOT_ID so it does NOT replay any recorded channel). Used only for
+# the CRIU-only control, right after a restore: a live app's netns still holds
+# the old sidecar's TPROXY rules, so a replacement is only safe post-restore.
+sidecar_up() {
+    podman rm -f "sidecar-$1"
+    podman run -d \
+      --name "sidecar-$1" \
+      --network "container:tokenring-$1" \
+      --cap-add NET_ADMIN \
+      --sysctl net.ipv4.ip_nonlocal_bind=1 \
+      -e MESH_SUBNET="$MESH_SUBNET" \
+      -e BREAKOUT_URL="$BREAKOUT_URL" \
+      -e CHECKPOINT_TARGET="tokenring-$1" \
+      sidecar
 }
 
 cmd=${1:-}
@@ -102,24 +118,13 @@ case "$cmd" in
     podman exec "sidecar-$sfx" tc qdisc del dev eth0 root 2>/dev/null || true
     ;;
 
-  latest-snapshot)
-    # The receiver keeps a `latest` symlink pointing at the newest snapshot id.
-    # Prefer it; fall back to the newest non-`latest` dir entry.
-    if [ -L "$SNAP_DIR/latest" ]; then
-        basename "$(readlink "$SNAP_DIR/latest")"
-    else
-        ls -t "$SNAP_DIR" 2>/dev/null | grep -v '^latest$' | head -n 1
-    fi
-    ;;
-
-  has-checkpoint)
+  has-snapshot)
+    # Artifact layout: the app's snapshot handler exports the CRIU image and the
+    # channel-state cut to /tmp on THIS host, keyed by snapshot_id and the app
+    # container id (tokenring-<suffix> = CHECKPOINT_TARGET). Both must exist.
     sfx=$2; sid=$3
-    test -f "$SNAP_DIR/$sid/tokenring-$sfx.tar.zst"
-    ;;
-
-  fetch-channels)
-    sfx=$2; sid=$3
-    podman exec "sidecar-$sfx" cat "/tmp/channel_states_$sid.json" 2>/dev/null || echo "{}"
+    test -f "/tmp/snapshot-$sid-tokenring-$sfx.tar.zst" \
+      && test -f "/tmp/snapshot-$sid-tokenring-$sfx.json"
     ;;
 
   kill)
@@ -128,19 +133,32 @@ case "$cmd" in
     ;;
 
   restore)
+    # CRIU-restore the app from its image, then start a FRESH restore-mode
+    # sidecar via the receiver's /run_sidecar. RESTORE_SNAPSHOT_ID makes that
+    # sidecar load this node's artifact and replay the recorded channel into the
+    # restored app before serving live traffic. No on-disk channel dump is read.
     sfx=$2; sid=$3
     podman rm -f "tokenring-$sfx"
-    podman container restore --tcp-established --import "$SNAP_DIR/$sid/tokenring-$sfx.tar.zst"
+    podman container restore --tcp-established --import "/tmp/snapshot-$sid-tokenring-$sfx.tar.zst"
+    breakout run_sidecar "{\"node\": \"$sfx\", \"snapshot_id\": \"$sid\"}"
+    ;;
+
+  restore-criu-only)
+    # The control: CRIU-restore the app's memory, then bring up a PLAIN sidecar
+    # that does NOT replay the recorded channel. The in-flight token captured as
+    # channel state is therefore lost, so the ring violates (duplicate epoch).
+    sfx=$2; sid=$3
+    podman rm -f "tokenring-$sfx"
+    podman container restore --tcp-established --import "/tmp/snapshot-$sid-tokenring-$sfx.tar.zst"
     sidecar_up "$sfx"
     ;;
 
-  sidecar-up)
-    sidecar_up "$2"
-    ;;
-
   trigger-snapshot)
-    sfx=$2; peer_ip=$3
-    podman exec "tokenring-$sfx" ./tokenring.py snapshot "$peer_ip" 5000
+    # Drive the receiver's /snapshot_trigger: it execs __START_SNAPSHOT__:<sid>
+    # into tokenring-<suffix>'s netns, which floods markers to its peers; every
+    # node then records its OWN piece of the global cut and exports its artifact.
+    sfx=$2; sid=$3
+    breakout snapshot_trigger "{\"node\": \"$sfx\", \"snapshot_id\": \"$sid\"}"
     ;;
 
   ps)

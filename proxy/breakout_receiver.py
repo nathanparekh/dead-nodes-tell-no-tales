@@ -6,7 +6,6 @@ run synchronously: the HTTP response reports success or failure, and the
 single-threaded server serializes concurrent requests.
 
   POST /checkpoint       {"target_id": ..., "export_path": ...}
-  POST /checkpoint-pair  {"caller_id": ..., "snapshot_id": ...}
   POST /restore          {"target_path": ...}
   POST /stop             {"container_id": ...}
   POST /snapshot_trigger {"node": ..., "snapshot_id": ...}
@@ -23,7 +22,6 @@ import argparse
 import glob
 import json
 import logging
-import os
 import re
 import socket
 import subprocess
@@ -35,12 +33,6 @@ COMMAND_TIMEOUT_S = 120
 SOCKET_TIMEOUT_S = 30
 CONTAINER_ID_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
 
-# Token-ring pair-checkpoint layout: export tarballs under
-# $SNAP_DIR/<snapshot_id>/<container>.tar.zst and keep a `latest` symlink.
-SNAP_DIR = os.environ.get("SNAP_DIR", "/tmp/snapshots")
-# The app container prefix; the sidecar's name tail (e.g. "-a") selects the peer.
-APP_PREFIX = os.environ.get("APP_PREFIX", "tokenring")
-
 # Filled in by main() from --mesh-subnet; MESH_BASE is the first three octets.
 MESH_SUBNET = "10.24.24.0/24"
 MESH_BASE = "10.24.24"
@@ -50,9 +42,9 @@ MESH_BASE = "10.24.24"
 BREAKOUT_URL = "http://10.99.0.1:8989"
 
 
-def run(argv: list) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, check=True, capture_output=True, text=True,
-                          timeout=COMMAND_TIMEOUT_S)
+def run(argv: list) -> None:
+    subprocess.run(argv, check=True, capture_output=True, text=True,
+                   timeout=COMMAND_TIMEOUT_S)
 
 
 def checkpoint(target_id: str, export_path: str) -> None:
@@ -69,86 +61,41 @@ def stop(container_id: str) -> None:
     run(["sudo", "podman", "rm", "-f", container_id])
 
 
-def _container_name(container_id: str) -> str:
-    """Resolve a container id/name to its canonical podman name (no leading /)."""
-    out = run(["sudo", "podman", "inspect", "--format", "{{.Name}}", container_id])
-    return out.stdout.strip().lstrip("/")
-
-
-def checkpoint_pair(caller_id: str, snapshot_id: str) -> None:
-    """Atomically checkpoint the app+sidecar PAIR for one token-ring node.
-
-    `caller_id` is the SIDECAR's own container id (it POSTs gethostname(), and
-    it shares the app's netns but not its UTS, so that id is the sidecar's).
-    We resolve the sidecar's name (e.g. "sidecar-a"), take the "-<suffix>" tail
-    to find the app ("<APP_PREFIX>-a"), and checkpoint BOTH with --leave-running
-    (load-bearing: a stop-checkpoint would tear down the shared netns mid-marker).
-
-    Tarballs land in $SNAP_DIR/<snapshot_id>/<container>.tar.zst; a `latest`
-    symlink is flipped to the new snapshot dir last, so it only ever points at a
-    complete checkpoint set.
-    """
-    sidecar_name = _container_name(caller_id)
-    if "-" not in sidecar_name:
-        raise ValueError(f"caller name {sidecar_name!r} has no -<suffix> tail")
-    suffix = sidecar_name.rsplit("-", 1)[1]
-    app_name = f"{APP_PREFIX}-{suffix}"
-
-    outdir = os.path.join(SNAP_DIR, snapshot_id)
-    os.makedirs(outdir, exist_ok=True)
-
-    # Checkpoint the app first (it holds the memory image the demo cares about),
-    # then the sidecar. Reuse the existing checkpoint() helper for both.
-    for name in (app_name, sidecar_name):
-        checkpoint(name, os.path.join(outdir, f"{name}.tar.zst"))
-
-    # Flip `latest` atomically: write a new symlink and rename it over the old.
-    link = os.path.join(SNAP_DIR, "latest")
-    tmp_link = link + ".tmp"
-    if os.path.islink(tmp_link) or os.path.exists(tmp_link):
-        os.remove(tmp_link)
-    os.symlink(snapshot_id, tmp_link)  # relative target: just the snapshot id
-    os.replace(tmp_link, link)
-    logging.info("checkpoint-pair %s: %s + %s -> %s",
-                 snapshot_id, app_name, sidecar_name, outdir)
-
-
 def snapshot_trigger(node: str, snapshot_id: str) -> None:
     # node/snapshot_id are field_ok-validated (CONTAINER_ID_RE), so no quotes or
     # backslashes can reach the python -c snippet. Any mesh-subnet destination is
     # TPROXY-redirected to the sidecar's intercept port, so the .250 sentinel host
-    # need not exist. The app container is APP_PREFIX-<node> (e.g. tokenring-a).
+    # need not exist.
+    # TODO: i guess this is fine tho
     snippet = (
         "import socket\n"
         "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
         f"s.sendto(b'__START_SNAPSHOT__:{snapshot_id}', ('{MESH_BASE}.250', 9999))\n"
         "s.close()\n"
     )
-    run(["sudo", "podman", "exec", f"{APP_PREFIX}-{node}", "python3", "-c", snippet])
+    run(["sudo", "podman", "exec", f"tokenring-{node}", "python3", "-c", snippet])
 
 
 def run_sidecar(node: str, snapshot_id: str) -> None:
     # node/snapshot_id are field_ok-validated (CONTAINER_ID_RE), so they are safe
     # to interpolate into the container name / env values below. The sidecar joins
-    # the already-restored app's netns (APP_PREFIX-<node>, e.g. tokenring-a) and
-    # self-gates on RESTORE_SNAPSHOT_ID to replay this node's recorded channel
-    # before serving live traffic. Sidecars are never CRIU'd, so --replace just
-    # clears any leftover from a prior restore.
+    # the already-restored app's netns and self-gates on RESTORE_SNAPSHOT_ID to
+    # replay this node's recorded channel before serving live traffic. Sidecars are
+    # never CRIU'd, so --replace just clears any leftover from a prior restore.
     run(["sudo", "podman", "run", "-d", "--replace",
          "--name", f"sidecar-{node}",
-         "--network", f"container:{APP_PREFIX}-{node}",
+         "--network", f"container:tokenring-{node}",
          "--cap-add", "NET_ADMIN",
          "--sysctl", "net.ipv4.ip_nonlocal_bind=1",
          "-e", f"MESH_SUBNET={MESH_SUBNET}",
          "-e", f"BREAKOUT_URL={BREAKOUT_URL}",
-         "-e", f"CHECKPOINT_TARGET={APP_PREFIX}-{node}",
+         "-e", f"CHECKPOINT_TARGET=tokenring-{node}",
          "-e", f"RESTORE_SNAPSHOT_ID={snapshot_id}",
          "sidecar"])
 
 
 ROUTES = {
     "/checkpoint": (checkpoint, ("target_id", "export_path")),
-    "/checkpoint-pair": (checkpoint_pair, ("caller_id", "snapshot_id")),
     "/restore": (restore, ("target_path",)),
     "/stop": (stop, ("container_id",)),
     "/snapshot_trigger": (snapshot_trigger, ("node", "snapshot_id")),
@@ -264,13 +211,6 @@ class BreakoutHandler(BaseHTTPRequestHandler):
                           self.path, " ".join(args), COMMAND_TIMEOUT_S)
             self._reply(504, {"ok": False,
                               "error": f"command timed out after {COMMAND_TIMEOUT_S}s"})
-            return
-        except (ValueError, OSError) as e:
-            # e.g. checkpoint_pair: unresolvable name tail, or a filesystem error
-            # creating the snapshot dir / latest symlink.
-            logging.error("%s %s: %s: %s",
-                          self.path, " ".join(args), type(e).__name__, e)
-            self._reply(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
             return
         logging.info("%s %s: done", self.path, " ".join(args))
         self._reply(200, {"ok": True})

@@ -46,5 +46,5 @@ breakout snapshot_trigger "{\"node\": \"$NODE\", \"snapshot_id\": \"$SNAPSHOT_ID
 
 echo "Node $NODE initiated snapshot $SNAPSHOT_ID."
 echo "Each node will write its OWN artifact to its LOCAL receiver:"
-echo "  /tmp/snapshot-$SNAPSHOT_ID-tokenring-<node>.json     (channel-state cut)"
-echo "  \$SNAP_DIR/$SNAPSHOT_ID/tokenring-<node>.tar.zst      (app CRIU image)"
+echo "  /tmp/snapshot-$SNAPSHOT_ID-tokenring-<node>.json       (channel-state cut)"
+echo "  /tmp/snapshot-$SNAPSHOT_ID-tokenring-<node>.tar.zst    (app CRIU image)"

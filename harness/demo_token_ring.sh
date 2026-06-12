@@ -7,6 +7,11 @@
 #   (a) with the proxy-recorded channel state replayed  -> verify PASS
 #   (b) CRIU memory only, no replay                     -> verify FAIL (duplicate epoch)
 #
+# Restore is artifact-based (main's snapshot/restore system): the snapshot writes
+# per node a CRIU image and a channel-state cut keyed by snapshot_id; restore (a)
+# CRIU-restores then starts a restore-mode sidecar (RESTORE_SNAPSHOT_ID) that
+# replays the recorded channel; restore (b) starts a plain sidecar with no replay.
+#
 # Run from a repo checkout on any one of the three hosts. Environment:
 #   A_SSH/B_SSH/C_SSH   ssh command prefix per host, e.g. "ssh ubuntu@172.31.32.239".
 #                       Empty string = that node is THIS host, run locally.
@@ -17,7 +22,6 @@
 #                       checkpoint, or the token outruns the markers)
 #   LOSS_TIMEOUT_MS     loss-recovery timer; MUST match how the nodes were
 #                       deployed (default 60000)
-#   SNAP_DIR            checkpoint dir on each host (default /tmp/snapshots)
 #   VERIFY_ROUNDS       rounds per verify  (default 30)
 #   BREAKOUT_GW         breakout receiver gateway IP (default 10.99.0.1; port 8989)
 # Flags:
@@ -32,7 +36,6 @@ A_IP=${A_IP:-10.24.24.10}; B_IP=${B_IP:-10.24.24.11}; C_IP=${C_IP:-10.24.24.12}
 PORT=${PORT:-5000}
 NETEM_MS=${NETEM_MS:-5000}
 LOSS_TIMEOUT_MS=${LOSS_TIMEOUT_MS:-60000}
-SNAP_DIR=${SNAP_DIR:-/tmp/snapshots}
 VERIFY_ROUNDS=${VERIFY_ROUNDS:-30}
 BREAKOUT_GW=${BREAKOUT_GW:-10.99.0.1}
 BREAKOUT_PORT=${BREAKOUT_PORT:-8989}
@@ -63,9 +66,9 @@ ssh_prefix() {
 node_run() {
     local p; p=$(ssh_prefix "$1"); shift
     if [ -z "$p" ]; then
-        sudo SNAP_DIR="$SNAP_DIR" bash "$HARNESS_DIR/node_ctl.sh" "$@"
+        sudo bash "$HARNESS_DIR/node_ctl.sh" "$@"
     else
-        $p sudo SNAP_DIR="$SNAP_DIR" bash -s -- "$@" < "$HARNESS_DIR/node_ctl.sh"
+        $p sudo bash -s -- "$@" < "$HARNESS_DIR/node_ctl.sh"
     fi
 }
 
@@ -125,7 +128,9 @@ fi
 
 # ---------------------------------------------------------------------------
 banner 3 "position + trigger snapshot"
-SID_BEFORE=$(node_run c latest-snapshot || true)
+# We pick the snapshot_id (the artifact flow keys everything by it). Each node's
+# CRIU image + channel-state cut land under /tmp on its own host, named by this id.
+SID="demo$(date +%s)"
 if [ "$RESTING" = 1 ]; then
     echo "[*] waiting for the token to rest in some node (have=1)"
     deadline=$(( $(date +%s) + 60 ))
@@ -143,42 +148,36 @@ else
         tokenring /h/wait_inflight.py "$A_IP" "$B_IP" "$PORT" 90 \
         || die "wait_inflight timed out — is the ring circulating?"
 fi
-echo "[*] triggering snapshot from C"
+echo "[*] triggering snapshot $SID from C"
 # The nodes' loss timers run from each node's last token FORWARD, which is at
 # or before this moment — so take the budget baseline now, not after collect.
 T_SNAP=$(date +%s)
-node_run c trigger-snapshot c "$A_IP" || die "trigger-snapshot failed on host c"
+node_run c trigger-snapshot c "$SID" || die "trigger-snapshot failed on host c"
 
 # ---------------------------------------------------------------------------
-banner 4 "collect: wait for checkpoints on all 3 hosts, fetch channel state"
-SID=""
+banner 4 "collect: wait for each node's artifact (CRIU image + channel-state cut)"
+# Each node exports its CRIU image AND its channel-state cut to /tmp on its own
+# host, named by $SID; has-snapshot checks both exist. B's cut waits on A's
+# netem-delayed marker, so poll instead of racing it.
 deadline=$(( $(date +%s) + 120 ))
+ready=0
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    SID=$(node_run c latest-snapshot || true)
-    if [ -n "$SID" ] && [ "$SID" != "$SID_BEFORE" ] \
-       && node_run a has-checkpoint a "$SID" \
-       && node_run b has-checkpoint b "$SID" \
-       && node_run c has-checkpoint c "$SID"; then
+    if node_run a has-snapshot a "$SID" \
+       && node_run b has-snapshot b "$SID" \
+       && node_run c has-snapshot c "$SID"; then
+        ready=1
         break
     fi
-    SID=""
     sleep 2
 done
-[ -n "$SID" ] || die "no complete checkpoint set within 120s (receiver log /var/log/breakout_receiver.log? sidecar can reach $BREAKOUT_GW:$BREAKOUT_PORT?)"
+[ "$ready" = 1 ] || die "no complete artifact set for $SID within 120s (receiver log /var/log/breakout_receiver.log? sidecar can reach $BREAKOUT_GW:$BREAKOUT_PORT?)"
 echo "[*] snapshot id: $SID"
 node_run a netem-off a || true
 for x in a b c; do
-    # A sidecar writes its JSON only once it has markers from BOTH peers; B's
-    # waits on A's netem-delayed marker, so poll briefly instead of racing it.
-    tries=15
-    while :; do
-        node_run "$x" fetch-channels "$x" "$SID" > "$TMPD/channels-$x.json" \
-            || die "fetch-channels failed on $x"
-        grep -q '"snapshot_id"' "$TMPD/channels-$x.json" && break
-        tries=$(( tries - 1 ))
-        [ "$tries" -gt 0 ] || break   # give up; the bite check will explain
-        sleep 1
-    done
+    # Pull each node's channel-state cut so the bite check (and the operator) can
+    # see what was recorded. host_run reads the artifact json from that node's host.
+    host_run "$x" cat "/tmp/snapshot-$SID-tokenring-$x.json" > "$TMPD/channels-$x.json" \
+        || die "could not read artifact json on $x"
     echo "[*] fetched channels-$x.json ($(wc -c < "$TMPD/channels-$x.json") bytes)"
 done
 
@@ -187,7 +186,7 @@ if [ "$RESTING" = 1 ]; then
     banner 5 "bite check (skipped: --resting)"
 else
     banner 5 "bite check: the in-flight TOKEN must be in B's recorded channel state"
-    if python3 -c 'import json,base64,sys; d=json.load(open(sys.argv[1])); msgs=[m for ch in d.get("channels",{}).values() for m in ch]; sys.exit(0 if any(base64.b64decode(m["payload_b64"]).startswith(b"TOKEN ") for m in msgs) else 1)' "$TMPD/channels-b.json"; then
+    if python3 -c 'import json,base64,sys; d=json.load(open(sys.argv[1])); msgs=[m for p in d.get("peers",{}).values() for m in p.get("channel",[])]; sys.exit(0 if any(base64.b64decode(m["payload_b64"]).startswith(b"TOKEN ") for m in msgs) else 1)' "$TMPD/channels-b.json"; then
         echo "[*] bite check OK: TOKEN recorded as channel state (CRIU cannot see it)"
     else
         echo "[!] bite check FAILED: no TOKEN in B's channel state. The token was resting in"
@@ -207,14 +206,11 @@ RES_A="skipped"
 if [ "$CRIU_ONLY" = 1 ]; then
     banner 7 "restore (a) (skipped: --criu-only)"
 else
-    banner 7 "restore (a): CRIU images + channel replay -> expect PASS"
+    banner 7 "restore (a): CRIU images + artifact channel replay -> expect PASS"
+    # node_ctl restore CRIU-restores the app, then starts a restore-mode sidecar
+    # (RESTORE_SNAPSHOT_ID=$SID) that loads this node's artifact and replays the
+    # recorded channel into the restored app -- no external replay step needed.
     for x in a b c; do node_run "$x" restore "$x" "$SID" || die "restore failed on $x"; done
-    for x in a b c; do
-        case "$x" in a) ip=$A_IP ;; b) ip=$B_IP ;; c) ip=$C_IP ;; esac
-        sudo podman run --rm --network vlan -v "$HARNESS_DIR:/h:ro" -v "$TMPD:/replay:ro" \
-            --entrypoint python3 tokenring /h/replay_channels.py "/replay/channels-$x.json" "$ip" \
-            || die "replay failed for $x"
-    done
     elapsed=$(( $(date +%s) - T_SNAP ))
     budget=$(( LOSS_TIMEOUT_MS / 1000 ))
     if [ "$elapsed" -ge $(( budget - 10 )) ]; then
@@ -239,7 +235,9 @@ if [ "$RESTING" = 1 ]; then
     banner 8 "restore (b) (skipped: --resting)"
 else
     banner 8 "restore (b): CRIU images only, NO replay -> expect FAIL"
-    for x in a b c; do node_run "$x" restore "$x" "$SID" || die "restore failed on $x"; done
+    # restore-criu-only brings up a PLAIN sidecar (no RESTORE_SNAPSHOT_ID), so the
+    # in-flight token recorded as channel state is never replayed -> ring violates.
+    for x in a b c; do node_run "$x" restore-criu-only "$x" "$SID" || die "restore failed on $x"; done
     wake=$(( T_SNAP + LOSS_TIMEOUT_MS / 1000 + 5 ))
     now=$(date +%s)
     if [ "$now" -lt "$wake" ]; then

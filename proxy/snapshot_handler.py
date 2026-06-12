@@ -180,39 +180,38 @@ class SnapshotController:
 
     def _trigger_app_snapshot_out_of_band(self, snapshot_id):
         """
-        Ask the host's breakout receiver to atomically CRIU-checkpoint the
-        app+sidecar PAIR for this token-ring node (the demo's restore path,
-        node_ctl.sh, imports the per-node tarball the receiver writes under
-        $SNAP_DIR/<snapshot_id>/tokenring-<suffix>.tar.zst).
-
-        We POST our OWN container name as caller_id: this code runs inside the
-        sidecar, which shares the app's network namespace but not its UTS, so
-        gethostname() returns the sidecar's id. The receiver resolves that to
-        the app/sidecar pair (tokenring-<suffix> + sidecar-<suffix>) and
-        checkpoints both with --leave-running.
+        Ask the host's breakout receiver to CRIU-checkpoint this container.
 
         Any failure here is logged but swallowed so it cannot brick the
         controller (an escape would leave is_snapshotting=True and drop every
         future marker as stale). A swallowed failure means NO app checkpoint
         was taken for this snapshot -- hence the loud marker.
         """
-        caller_id = socket.gethostname()
+        container_id = CHECKPOINT_TARGET
+        if not container_id:
+            # gethostname() is the sidecar's own id (shared netns, separate UTS),
+            # not the app container we mean to CRIU-checkpoint, so the export
+            # filename would silently target the WRONG container. Make it loud.
+            container_id = socket.gethostname()
+            print(f"[!] CHECKPOINT_TARGET unset; checkpoint target falls back to "
+                  f"sidecar hostname '{container_id}' -- this is almost certainly "
+                  f"the WRONG container (set CHECKPOINT_TARGET to the app id)")
 
         # Catch everything, including ValueError from a malformed BREAKOUT_URL
         # at Request() construction and http.client.HTTPException from urlopen.
         try:
             payload = json.dumps({
-                "caller_id": caller_id,
-                "snapshot_id": snapshot_id,
+                "target_id": container_id,
+                "export_path": f"/tmp/snapshot-{snapshot_id}-{container_id}.tar.zst",
             }).encode("utf-8")
             request = urllib.request.Request(
-                f"{BREAKOUT_URL}/checkpoint-pair",
+                f"{BREAKOUT_URL}/checkpoint",
                 data=payload,
                 headers={"Content-Type": "application/json"},
             )
             with urllib.request.urlopen(request, timeout=CHECKPOINT_REQUEST_TIMEOUT_S):
                 pass
-            print(f"[*] Host checkpointed pair for {caller_id} (snapshot {snapshot_id})")
+            print(f"[*] Host checkpointed {container_id} (snapshot {snapshot_id})")
         except Exception as e:
             print(f"[!] CHECKPOINT FAILED for snapshot {snapshot_id} "
                   f"({type(e).__name__}: {e}); no app state was saved")
@@ -425,38 +424,12 @@ class SnapshotController:
         self._flush_and_reset()
 
     def _flush_and_reset(self):
-        # Token-ring addition: persist the recorded channel state to a JSON file
-        # BEFORE replaying (which clears channel_states). The demo kills the
-        # containers after the snapshot, so this on-disk dump is the only durable
-        # copy harness/replay_channels.py can replay into the restored nodes.
-        # Written on every reset (finish AND abort) so the harness always finds
-        # a file. sid is read here, before current_snapshot_id is cleared.
-        sid = self.current_snapshot_id.decode() if self.current_snapshot_id else "unknown"
-
         self.is_snapshotting = False
         self.current_snapshot_id = None
         self.snapshot_deadline = None
         self.recording_channels = set()
         self.recorded_send_seq = {}
         self.recorded_recv_seq = {}
-
-        try:
-            channels = {
-                ip: [
-                    {
-                        "seq": m["seq"],
-                        "payload_b64": base64.b64encode(m["payload"]).decode(),
-                        "src_port": m["src_port"],
-                        "dst_port": m["dst_port"],
-                    }
-                    for m in sorted(msgs, key=lambda x: x["seq"])
-                ]
-                for ip, msgs in self.channel_states.items()
-            }
-            with open(f"/tmp/channel_states_{sid}.json", "w") as f:
-                json.dump({"snapshot_id": sid, "channels": channels}, f)
-        except Exception as e:
-            print(f"[!] WARNING: failed to write channel state dump: {e}")
 
         # Recorded messages were already received and ACKed by the RUDP layer
         # (recv_seq advanced at receipt); recording only deferred their delivery
