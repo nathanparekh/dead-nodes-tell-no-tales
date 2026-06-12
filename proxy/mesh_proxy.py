@@ -198,44 +198,67 @@ class MeshProxy:
         )
         asyncio.create_task(self._retransmit_loop())
 
+    def _forward_intercepted(self, data, ancdata, addr):
+        """Route one intercepted app datagram: tunnel if mesh-bound, else direct spoofed send."""
+        orig_src_port = addr[1]
+        orig_src_ip = addr[0]
+        target_ip = None
+        target_port = None
+
+        for cmsg_level, cmsg_type, cmsg_data in ancdata:
+            if cmsg_level == socket.SOL_IP and cmsg_type == IP_RECVORIGDSTADDR:
+                target_port = struct.unpack("!H", cmsg_data[2:4])[0]
+                target_ip = socket.inet_ntoa(cmsg_data[4:8])
+                break
+
+        if target_ip and target_port:
+            # DIRECT ROUTING LOGIC (No probing)
+            if ipaddress.ip_address(target_ip) in self.mesh_network:
+                # ASSUME PROXY EXISTS: Wrap and send via tunnel
+                peer = self.get_peer(target_ip)
+                target_ip_bytes = socket.inet_aton(target_ip)
+                self.send_data(
+                    target_ip, peer, orig_src_port, target_port, target_ip_bytes, data
+                )
+            else:
+                # OUTSIDE SUBNET: Handle normally (direct spoofed send)
+                spoof_sock = self.get_spoof_sock(orig_src_ip, orig_src_port)
+                spoof_sock.sendto(data, (target_ip, target_port))
+
     def _handle_local_intercept(self):
         try:
             while True:
                 data, ancdata, flags, addr = self.local_sock.recvmsg(65536, 1024)
 
                 if data.startswith(b"__START_SNAPSHOT__"):
-                    snapshot_id = str(uuid.uuid4()).encode()
+                    prefix = b"__START_SNAPSHOT__:"
+                    if data.startswith(prefix):
+                        snapshot_id = data[len(prefix):]
+                    else:
+                        snapshot_id = str(uuid.uuid4()).encode()
                     marker_payload = b"__MARKER__:" + snapshot_id
                     self.snapshot_ctrl.process_message(
                         "127.0.0.1", 0, marker_payload, 0, 0, "127.0.0.1"
                     )
                     continue
 
-                orig_src_port = addr[1]
-                orig_src_ip = addr[0]
-                target_ip = None
-                target_port = None
+                self._forward_intercepted(data, ancdata, addr)
 
-                for cmsg_level, cmsg_type, cmsg_data in ancdata:
-                    if cmsg_level == socket.SOL_IP and cmsg_type == IP_RECVORIGDSTADDR:
-                        target_port = struct.unpack("!H", cmsg_data[2:4])[0]
-                        target_ip = socket.inet_ntoa(cmsg_data[4:8])
-                        break
+        except BlockingIOError:
+            pass
 
-                if target_ip and target_port:
-                    # DIRECT ROUTING LOGIC (No probing)
-                    if ipaddress.ip_address(target_ip) in self.mesh_network:
-                        # ASSUME PROXY EXISTS: Wrap and send via tunnel
-                        peer = self.get_peer(target_ip)
-                        target_ip_bytes = socket.inet_aton(target_ip)
-                        self.send_data(
-                            target_ip, peer, orig_src_port, target_port, target_ip_bytes, data
-                        )
-                    else:
-                        # OUTSIDE SUBNET: Handle normally (direct spoofed send)
-                        spoof_sock = self.get_spoof_sock(orig_src_ip, orig_src_port)
-                        spoof_sock.sendto(data, (target_ip, target_port))
+    def drain_intercept(self):
+        """Synchronously forward ALL currently-pending app datagrams on the local socket.
 
+        Mirrors the normal (non-__START_SNAPSHOT__) path of _handle_local_intercept,
+        assigning sequence numbers / routing each datagram identically. Non-blocking:
+        stops on BlockingIOError. Safe to call re-entrantly from within
+        _handle_local_intercept's own recv loop.
+        """
+        try:
+            while True:
+                data, ancdata, flags, addr = self.local_sock.recvmsg(65536, 1024)
+                self._forward_intercepted(data, ancdata, addr)
         except BlockingIOError:
             pass
 

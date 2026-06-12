@@ -5,9 +5,12 @@ Containers POST JSON here instead of talking to the podman socket. Commands
 run synchronously: the HTTP response reports success or failure, and the
 single-threaded server serializes concurrent requests.
 
-  POST /checkpoint {"target_id": ..., "export_path": ...}
-  POST /restore    {"target_path": ...}
-  POST /stop       {"container_id": ...}
+  POST /checkpoint       {"target_id": ..., "export_path": ...}
+  POST /restore          {"target_path": ...}
+  POST /stop             {"container_id": ...}
+  POST /snapshot_trigger {"node": ..., "snapshot_id": ...}
+  POST /snapshot_state   <artifact dict>
+  GET  /snapshot/<snapshot_id>
   GET  /health
 
 Bind this to an internal interface (the breakout bridge gateway), never
@@ -15,6 +18,7 @@ Bind this to an internal interface (the breakout bridge gateway), never
 """
 
 import argparse
+import glob
 import json
 import logging
 import re
@@ -27,6 +31,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 COMMAND_TIMEOUT_S = 120
 SOCKET_TIMEOUT_S = 30
 CONTAINER_ID_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
+
+# Filled in by main() from --mesh-subnet; MESH_BASE is the first three octets.
+MESH_SUBNET = "10.24.24.0/24"
+MESH_BASE = "10.24.24"
 
 
 def run(argv: list) -> None:
@@ -48,10 +56,25 @@ def stop(container_id: str) -> None:
     run(["sudo", "podman", "rm", "-f", container_id])
 
 
+def snapshot_trigger(node: str, snapshot_id: str) -> None:
+    # node/snapshot_id are field_ok-validated (CONTAINER_ID_RE), so no quotes or
+    # backslashes can reach the python -c snippet. Any mesh-subnet destination is
+    # TPROXY-redirected to the sidecar's intercept port, so the .250 sentinel host
+    # need not exist.
+    snippet = (
+        "import socket\n"
+        "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+        f"s.sendto(b'__START_SNAPSHOT__:{snapshot_id}', ('{MESH_BASE}.250', 9999))\n"
+        "s.close()\n"
+    )
+    run(["sudo", "podman", "exec", f"counter-{node}", "python3", "-c", snippet])
+
+
 ROUTES = {
     "/checkpoint": (checkpoint, ("target_id", "export_path")),
     "/restore": (restore, ("target_path",)),
     "/stop": (stop, ("container_id",)),
+    "/snapshot_trigger": (snapshot_trigger, ("node", "snapshot_id")),
 }
 
 
@@ -81,10 +104,50 @@ class BreakoutHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._reply(200, {"ok": True})
-        else:
-            self._reply(404, {"ok": False, "error": "unknown endpoint"})
+            return
+        if self.path.startswith("/snapshot/"):
+            snapshot_id = self.path[len("/snapshot/"):]
+            if CONTAINER_ID_RE.fullmatch(snapshot_id) is None:
+                self._reply(400, {"ok": False, "error": "invalid snapshot id"})
+                return
+            nodes = []
+            for path in sorted(glob.glob(f"/tmp/snapshot-{snapshot_id}-*.json")):
+                with open(path) as f:
+                    nodes.append(json.load(f))
+            if not nodes:
+                self._reply(404, {"ok": False, "error": "unknown snapshot"})
+                return
+            logging.info("/snapshot/%s: served %d node(s)", snapshot_id, len(nodes))
+            self._reply(200, {"snapshot_id": snapshot_id, "nodes": nodes})
+            return
+        self._reply(404, {"ok": False, "error": "unknown endpoint"})
 
     def do_POST(self):
+        if self.path == "/snapshot_state":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+            except ValueError:
+                self._reply(400, {"ok": False, "error": "body must be valid JSON"})
+                return
+            # The nested "peers" is opaque to field_ok; only the two filename-safe
+            # identifiers that build the on-disk path are validated here.
+            if (not isinstance(body, dict)
+                    or not isinstance(body.get("snapshot_id"), str)
+                    or not isinstance(body.get("node"), str)
+                    or CONTAINER_ID_RE.fullmatch(body["snapshot_id"]) is None
+                    or CONTAINER_ID_RE.fullmatch(body["node"]) is None):
+                self._reply(400, {"ok": False,
+                                  "error": "snapshot_id and node must be "
+                                           "filename-safe strings"})
+                return
+            path = f"/tmp/snapshot-{body['snapshot_id']}-{body['node']}.json"
+            with open(path, "w") as f:
+                json.dump(body, f)
+            logging.info("/snapshot_state %s: wrote %s", body["node"], path)
+            self._reply(200, {"ok": True})
+            return
+
         route = ROUTES.get(self.path)
         if route is None:
             self._reply(404, {"ok": False,
@@ -141,11 +204,16 @@ class InternalHTTPServer(HTTPServer):
 
 
 def main() -> None:
+    global MESH_SUBNET, MESH_BASE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="10.99.0.1",
                         help="internal interface address to bind (default: breakout bridge gateway)")
     parser.add_argument("--port", type=int, default=8989)
+    parser.add_argument("--mesh-subnet", default="10.24.24.0/24",
+                        help="mesh subnet CIDR; snapshot triggers target <first three octets>.250")
     args = parser.parse_args()
+    MESH_SUBNET = args.mesh_subnet
+    MESH_BASE = ".".join(MESH_SUBNET.split("/")[0].split(".")[:3])
     server = InternalHTTPServer((args.host, args.port), BreakoutHandler)
     logging.info("breakout receiver listening on %s:%s", args.host, args.port)
     server.serve_forever()

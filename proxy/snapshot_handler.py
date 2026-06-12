@@ -49,7 +49,11 @@ class SnapshotController:
                 )
                 self.is_snapshotting = True
                 self.current_snapshot_id = marker_id
-                self._trigger_app_snapshot_out_of_band(marker_id.decode())
+
+                # Flush any app-emitted datagrams still pending on the intercept
+                # socket so they get PRE-marker seqs (i.e. land on the sending
+                # side of this outbound channel cut, not in the recorded state).
+                self.proxy.drain_intercept()
 
                 self.channel_states.clear()
                 self.recorded_send_seq = {}
@@ -84,6 +88,13 @@ class SnapshotController:
                 # Now waiting for each peer's marker; bound that wait so a peer
                 # that dies mid-snapshot can't pin is_snapshotting=True forever.
                 self.snapshot_deadline = time.time() + SNAPSHOT_TIMEOUT
+
+                # Trigger the app's CRIU checkpoint AFTER broadcasting markers.
+                # Any datagram the app emits between this broadcast and the dump's
+                # freeze is a knowingly-accepted microsecond race: this is the
+                # pragmatic outbound-boundary ordering, not the airtight
+                # freeze-drain-dump version.
+                self._trigger_app_snapshot_out_of_band(marker_id.decode())
 
                 if not self.recording_channels:
                     self._finish_global_snapshot()
@@ -141,7 +152,7 @@ class SnapshotController:
         try:
             payload = json.dumps({
                 "target_id": container_id,
-                "export_path": f"/tmp/{snapshot_id}.tar.zst",
+                "export_path": f"/tmp/snapshot-{snapshot_id}-{container_id}.tar.zst",
             }).encode("utf-8")
             request = urllib.request.Request(
                 f"{BREAKOUT_URL}/checkpoint",
@@ -169,11 +180,37 @@ class SnapshotController:
         # clears it. This artifact (per-peer send_seq/recv_seq + recorded in-flight
         # messages) is what a restored sidecar loads instead of being CRIU'd.
         artifact = self._build_artifact()
-        # TODO(next step): POST `artifact` to the breakout receiver for durable
-        # storage keyed by snapshot_id. For now log it so the recorded cut is
-        # visible and the capture path is exercised end to end.
-        print("[*] Global Snapshot Complete! Recorded cut: " + json.dumps(artifact))
+        # POST the recorded cut to the breakout receiver for durable storage
+        # keyed by snapshot_id; build it BEFORE the flush clears the state.
+        self._post_artifact(artifact)
+        print(f"[*] Global Snapshot Complete! Recorded cut for snapshot "
+              f"{artifact['snapshot_id']} ({len(artifact['peers'])} peers).")
         self._flush_and_reset()
+
+    def _post_artifact(self, artifact):
+        """
+        POST the recorded Chandy-Lamport cut to the host's breakout receiver
+        for durable storage keyed by snapshot_id.
+
+        Any failure here is logged but swallowed (same discipline as
+        _trigger_app_snapshot_out_of_band) so a flaky POST cannot wedge the
+        controller; a swallowed failure means this node's cut was not persisted.
+        """
+        # Catch everything, including ValueError from a malformed BREAKOUT_URL
+        # at Request() construction and http.client.HTTPException from urlopen.
+        try:
+            payload = json.dumps(artifact).encode("utf-8")
+            request = urllib.request.Request(
+                f"{BREAKOUT_URL}/snapshot_state",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=CHECKPOINT_REQUEST_TIMEOUT_S):
+                pass
+            print(f"[*] Persisted cut for snapshot {artifact['snapshot_id']}")
+        except Exception as e:
+            print(f"[!] PERSIST FAILED for snapshot {artifact['snapshot_id']} "
+                  f"({type(e).__name__}: {e}); cut was not stored")
 
     def _build_artifact(self):
         """Serialize this node's recorded Chandy-Lamport cut.
