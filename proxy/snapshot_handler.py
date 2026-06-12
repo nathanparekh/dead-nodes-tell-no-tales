@@ -271,6 +271,9 @@ class SnapshotController:
                     peer_state.send_seq = peer_artifact["send_seq"]
                 if peer_artifact.get("recv_seq") is not None:
                     peer_state.recv_seq = peer_artifact["recv_seq"]
+                    # Pin the restored coordinate so the first live packet does
+                    # not overwrite it via the first-contact resync adoption.
+                    peer_state.recv_initialized = True
 
             for peer_ip, peer_artifact in peers.items():
                 # These were received+ACKed before the cut; recording only
