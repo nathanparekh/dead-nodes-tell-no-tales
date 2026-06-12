@@ -5,10 +5,14 @@ Containers POST JSON here instead of talking to the podman socket. Commands
 run synchronously: the HTTP response reports success or failure, and the
 single-threaded server serializes concurrent requests.
 
-  POST /checkpoint      {"target_id": ..., "export_path": ...}
-  POST /checkpoint-pair {"caller_id": ..., "snapshot_id": ...}
-  POST /restore         {"target_path": ...}
-  POST /stop            {"container_id": ...}
+  POST /checkpoint       {"target_id": ..., "export_path": ...}
+  POST /checkpoint-pair  {"caller_id": ..., "snapshot_id": ...}
+  POST /restore          {"target_path": ...}
+  POST /stop             {"container_id": ...}
+  POST /snapshot_trigger {"node": ..., "snapshot_id": ...}
+  POST /snapshot_state   <artifact dict>
+  POST /run_sidecar      {"node": ..., "snapshot_id": ...}
+  GET  /snapshot/<snapshot_id>
   GET  /health
 
 Bind this to an internal interface (the breakout bridge gateway), never
@@ -16,6 +20,7 @@ Bind this to an internal interface (the breakout bridge gateway), never
 """
 
 import argparse
+import glob
 import json
 import logging
 import os
@@ -35,6 +40,14 @@ CONTAINER_ID_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
 SNAP_DIR = os.environ.get("SNAP_DIR", "/tmp/snapshots")
 # The app container prefix; the sidecar's name tail (e.g. "-a") selects the peer.
 APP_PREFIX = os.environ.get("APP_PREFIX", "tokenring")
+
+# Filled in by main() from --mesh-subnet; MESH_BASE is the first three octets.
+MESH_SUBNET = "10.24.24.0/24"
+MESH_BASE = "10.24.24"
+
+# Filled in by main() from --host/--port; the restore-mode sidecar reads its
+# artifact back from this same receiver, so it must be told where we live.
+BREAKOUT_URL = "http://10.99.0.1:8989"
 
 
 def run(argv: list) -> subprocess.CompletedProcess:
@@ -100,11 +113,46 @@ def checkpoint_pair(caller_id: str, snapshot_id: str) -> None:
                  snapshot_id, app_name, sidecar_name, outdir)
 
 
+def snapshot_trigger(node: str, snapshot_id: str) -> None:
+    # node/snapshot_id are field_ok-validated (CONTAINER_ID_RE), so no quotes or
+    # backslashes can reach the python -c snippet. Any mesh-subnet destination is
+    # TPROXY-redirected to the sidecar's intercept port, so the .250 sentinel host
+    # need not exist. The app container is APP_PREFIX-<node> (e.g. tokenring-a).
+    snippet = (
+        "import socket\n"
+        "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+        f"s.sendto(b'__START_SNAPSHOT__:{snapshot_id}', ('{MESH_BASE}.250', 9999))\n"
+        "s.close()\n"
+    )
+    run(["sudo", "podman", "exec", f"{APP_PREFIX}-{node}", "python3", "-c", snippet])
+
+
+def run_sidecar(node: str, snapshot_id: str) -> None:
+    # node/snapshot_id are field_ok-validated (CONTAINER_ID_RE), so they are safe
+    # to interpolate into the container name / env values below. The sidecar joins
+    # the already-restored app's netns (APP_PREFIX-<node>, e.g. tokenring-a) and
+    # self-gates on RESTORE_SNAPSHOT_ID to replay this node's recorded channel
+    # before serving live traffic. Sidecars are never CRIU'd, so --replace just
+    # clears any leftover from a prior restore.
+    run(["sudo", "podman", "run", "-d", "--replace",
+         "--name", f"sidecar-{node}",
+         "--network", f"container:{APP_PREFIX}-{node}",
+         "--cap-add", "NET_ADMIN",
+         "--sysctl", "net.ipv4.ip_nonlocal_bind=1",
+         "-e", f"MESH_SUBNET={MESH_SUBNET}",
+         "-e", f"BREAKOUT_URL={BREAKOUT_URL}",
+         "-e", f"CHECKPOINT_TARGET={APP_PREFIX}-{node}",
+         "-e", f"RESTORE_SNAPSHOT_ID={snapshot_id}",
+         "sidecar"])
+
+
 ROUTES = {
     "/checkpoint": (checkpoint, ("target_id", "export_path")),
     "/checkpoint-pair": (checkpoint_pair, ("caller_id", "snapshot_id")),
     "/restore": (restore, ("target_path",)),
     "/stop": (stop, ("container_id",)),
+    "/snapshot_trigger": (snapshot_trigger, ("node", "snapshot_id")),
+    "/run_sidecar": (run_sidecar, ("node", "snapshot_id")),
 }
 
 
@@ -134,10 +182,50 @@ class BreakoutHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._reply(200, {"ok": True})
-        else:
-            self._reply(404, {"ok": False, "error": "unknown endpoint"})
+            return
+        if self.path.startswith("/snapshot/"):
+            snapshot_id = self.path[len("/snapshot/"):]
+            if CONTAINER_ID_RE.fullmatch(snapshot_id) is None:
+                self._reply(400, {"ok": False, "error": "invalid snapshot id"})
+                return
+            nodes = []
+            for path in sorted(glob.glob(f"/tmp/snapshot-{snapshot_id}-*.json")):
+                with open(path) as f:
+                    nodes.append(json.load(f))
+            if not nodes:
+                self._reply(404, {"ok": False, "error": "unknown snapshot"})
+                return
+            logging.info("/snapshot/%s: served %d node(s)", snapshot_id, len(nodes))
+            self._reply(200, {"snapshot_id": snapshot_id, "nodes": nodes})
+            return
+        self._reply(404, {"ok": False, "error": "unknown endpoint"})
 
     def do_POST(self):
+        if self.path == "/snapshot_state":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+            except ValueError:
+                self._reply(400, {"ok": False, "error": "body must be valid JSON"})
+                return
+            # The nested "peers" is opaque to field_ok; only the two filename-safe
+            # identifiers that build the on-disk path are validated here.
+            if (not isinstance(body, dict)
+                    or not isinstance(body.get("snapshot_id"), str)
+                    or not isinstance(body.get("node"), str)
+                    or CONTAINER_ID_RE.fullmatch(body["snapshot_id"]) is None
+                    or CONTAINER_ID_RE.fullmatch(body["node"]) is None):
+                self._reply(400, {"ok": False,
+                                  "error": "snapshot_id and node must be "
+                                           "filename-safe strings"})
+                return
+            path = f"/tmp/snapshot-{body['snapshot_id']}-{body['node']}.json"
+            with open(path, "w") as f:
+                json.dump(body, f)
+            logging.info("/snapshot_state %s: wrote %s", body["node"], path)
+            self._reply(200, {"ok": True})
+            return
+
         route = ROUTES.get(self.path)
         if route is None:
             self._reply(404, {"ok": False,
@@ -201,11 +289,17 @@ class InternalHTTPServer(HTTPServer):
 
 
 def main() -> None:
+    global MESH_SUBNET, MESH_BASE, BREAKOUT_URL
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="10.99.0.1",
                         help="internal interface address to bind (default: breakout bridge gateway)")
     parser.add_argument("--port", type=int, default=8989)
+    parser.add_argument("--mesh-subnet", default="10.24.24.0/24",
+                        help="mesh subnet CIDR; snapshot triggers target <first three octets>.250")
     args = parser.parse_args()
+    MESH_SUBNET = args.mesh_subnet
+    MESH_BASE = ".".join(MESH_SUBNET.split("/")[0].split(".")[:3])
+    BREAKOUT_URL = f"http://{args.host}:{args.port}"
     server = InternalHTTPServer((args.host, args.port), BreakoutHandler)
     logging.info("breakout receiver listening on %s:%s", args.host, args.port)
     server.serve_forever()
