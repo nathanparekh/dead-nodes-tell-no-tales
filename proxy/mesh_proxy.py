@@ -26,11 +26,6 @@ class PeerState:
         self.send_seq = 0
         self.unacked = {}  # {seq: (timestamp, packet_bytes)}
         self.recv_seq = 0
-        # False until the first packet from this peer is seen. A freshly
-        # (re)started sidecar cannot assume a long-lived peer's stream begins at
-        # 0, so we adopt the first seq we actually see as the baseline instead of
-        # buffering every packet as FUTURE forever.
-        self.recv_initialized = False
         self.recv_buffer = (
             {}
         )  # {seq: (payload_bytes, orig_src_port, orig_dst_port, exact_local_ip)}
@@ -74,21 +69,6 @@ class TunnelProtocol(asyncio.DatagramProtocol):
             # Send ACK
             ack_packet = ACK_HEADER.pack(1, seq)
             self.proxy.tunnel_transport.sendto(ack_packet, (remote_ip, TUNNEL_PORT))
-
-            # --- RESYNC ON FIRST CONTACT ---
-            # A restarted sidecar has recv_seq 0, but a long-lived peer may
-            # already be at a high send_seq; assuming 0 makes every packet look
-            # FUTURE and buffer forever. Adopt the first seq we see from a peer as
-            # the baseline so a restart re-syncs. Restore sets recv_seq AND
-            # recv_initialized=True explicitly, so this only fires for peers
-            # discovered organically (live traffic).
-            if not peer.recv_initialized:
-                if seq != peer.recv_seq:
-                    print(
-                        f"[<-] first packet from {remote_ip}: adopting recv_seq {seq} (was {peer.recv_seq})"
-                    )
-                peer.recv_seq = seq
-                peer.recv_initialized = True
 
             # --- STRICT IN-ORDER DELIVERY LOGIC ---
             if seq == peer.recv_seq:
