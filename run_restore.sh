@@ -49,9 +49,20 @@ breakout_ok() { # usage: breakout_ok <endpoint> <json-body>
     echo
 }
 
-if ! curl -fsS --max-time 5 "$BREAKOUT_URL/health" >/dev/null; then
-    echo "ERROR: breakout receiver unreachable at $BREAKOUT_URL" >&2
-    exit 1
+# Ensure THIS node's breakout receiver is up (restore drives the LOCAL receiver).
+# If it is down, start it the same way build.sh does -- detached so it survives
+# this script and the SSH session -- rather than aborting the restore. Run this
+# from the repo root so proxy/breakout_receiver.py resolves.
+if ! curl -fsS --max-time 5 "$BREAKOUT_URL/health" >/dev/null 2>&1; then
+    echo "[*] Breakout receiver down at $BREAKOUT_URL; starting it locally..."
+    sudo setsid python3 proxy/breakout_receiver.py --host 10.99.0.1 --port 8989 \
+        --mesh-subnet 10.24.24.0/24 </dev/null >/tmp/breakout-receiver.log 2>&1 &
+    sleep 1
+    if ! curl -fsS --max-time 5 "$BREAKOUT_URL/health" >/dev/null 2>&1; then
+        echo "ERROR: breakout receiver still unreachable at $BREAKOUT_URL after start;" >&2
+        echo "       run this from the repo root on the node being restored." >&2
+        exit 1
+    fi
 fi
 
 echo "Restoring snapshot $SNAPSHOT_ID across nodes: ${NODES[*]}"
