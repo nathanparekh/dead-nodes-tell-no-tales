@@ -19,6 +19,11 @@ BREAKOUT_URL="http://$BREAKOUT_GW:$BREAKOUT_PORT"
 # The app attaches to a podman network on the VXLAN overlay; the operator
 # pre-creates it and passes its NAME via MESH_NET. Default stays "vlan".
 MESH_NET="${MESH_NET:-vlan}"
+# Mesh member IPs the sidecars record for the Chandy-Lamport cut. Default keeps
+# the existing 3-node behavior; the 6-node runbook exports MESH_MEMBERS with all
+# six before running build.sh (otherwise .13/.14/.15 go plain and are never
+# recorded).
+MESH_MEMBERS_ENV="${MESH_MEMBERS:-10.24.24.10,10.24.24.11,10.24.24.12}"
 
 sudo podman build --network=host -t counter -f Containerfile.counter .
 
@@ -110,6 +115,7 @@ if [ "$PROXY" = true ]; then
       --cap-add NET_ADMIN \
       --sysctl net.ipv4.ip_nonlocal_bind=1 \
       -e MESH_SUBNET="$MESH_SUBNET" \
+      -e MESH_MEMBERS="$MESH_MEMBERS_ENV" \
       -e BREAKOUT_URL="$BREAKOUT_URL" \
       -e CHECKPOINT_TARGET="$APP_NAME" \
       sidecar

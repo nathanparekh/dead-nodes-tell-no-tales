@@ -127,4 +127,6 @@ for node in "${NODES[@]}"; do
     breakout run_sidecar "{\"node\": \"$node\", \"snapshot_id\": \"$SNAPSHOT_ID\"}"
 done
 
-echo "Restore complete. Verify with: sum of the node counters should equal 30."
+echo "Restore complete. Verify the conserved total with mesh_ctl.sh:"
+echo "  3-node: ./mesh_ctl.sh sum 10.24.24.10 5000 10.24.24.11 5000 10.24.24.12 5000 30 5000 3"
+echo "  6-node: ./mesh_ctl.sh sum6 60"

@@ -98,8 +98,8 @@ def state(host, port):
     print(reply)
     return 0
 
-def transfer(from_host, from_port, to_host, to_port, amount):
-    msg = f"TRANSFER tx123 {to_host} {to_port} {amount}"
+def transfer(from_host, from_port, to_host, to_port, amount, txid="tx123"):
+    msg = f"TRANSFER {txid} {to_host} {to_port} {amount}"
     reply = request_udp(from_host, from_port, msg, 1000)
     if reply is None:
         return 1
@@ -160,12 +160,49 @@ def sum_counters(args):
             
         time.sleep(0.5)
         elapsed += 100
-        
+
+    return 1
+
+def sumn(args):
+    expected = int(args[0])
+    timeout_ms = int(args[1])
+    stable_needed = int(args[2])
+    # Remaining args are HOST PORT pairs for the N nodes to poll.
+    pairs = [(args[i], args[i + 1]) for i in range(3, len(args), 2)]
+    n = len(pairs)
+
+    elapsed = 0
+    stable = 0
+
+    while elapsed <= timeout_ms:
+        counters = [get_counter(host, port) for host, port in pairs]
+        missing = counters.count(None)
+
+        if missing == 0:
+            total = sum(counters)
+            status = "PASS" if total == expected else "FAIL"
+            breakdown = " ".join(f"{host}:{port}={c}" for (host, port), c in zip(pairs, counters))
+            print(f"SUMN n={n} total={total} expected={expected} {status} {breakdown}", flush=True)
+
+            if total == expected:
+                stable += 1
+            else:
+                stable = 0
+
+            if stable >= stable_needed:
+                return 0
+        else:
+            print(f"SUMN waiting ({missing} nodes missing)", flush=True)
+            stable = 0
+
+        time.sleep(0.5)
+        elapsed += 100
+
     return 1
 
 def main():
     if len(sys.argv) < 2:
-        die(f"usage: {sys.argv[0]} node|state|transfer|reset|sum ...")
+        die(f"usage: {sys.argv[0]} node|state|transfer|reset|sum|sumn ...")
 
     cmd = sys.argv[1]
 
@@ -180,9 +217,10 @@ def main():
         sys.exit(state(sys.argv[2], sys.argv[3]))
 
     elif cmd == "transfer":
-        if len(sys.argv) != 7:
-            die(f"usage: {sys.argv[0]} transfer FROM_HOST FROM_PORT TO_HOST TO_PORT AMOUNT")
-        sys.exit(transfer(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]))
+        if len(sys.argv) not in (7, 8):
+            die(f"usage: {sys.argv[0]} transfer FROM_HOST FROM_PORT TO_HOST TO_PORT AMOUNT [TXID]")
+        txid = sys.argv[7] if len(sys.argv) == 8 else "tx123"
+        sys.exit(transfer(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], txid))
 
     elif cmd == "reset":
         if len(sys.argv) != 5:
@@ -193,6 +231,14 @@ def main():
         if len(sys.argv) != 11:
             die(f"usage: {sys.argv[0]} sum A_HOST A_PORT B_HOST B_PORT C_HOST C_PORT EXPECTED TIMEOUT_MS STABLE_POLLS")
         sys.exit(sum_counters(sys.argv[2:]))
+
+    elif cmd == "sumn":
+        args = sys.argv[2:]
+        # Need EXPECTED TIMEOUT_MS STABLE_POLLS plus an even number of HOST/PORT
+        # args (at least one pair).
+        if len(args) < 5 or (len(args) - 3) % 2 != 0:
+            die(f"usage: {sys.argv[0]} sumn EXPECTED TIMEOUT_MS STABLE_POLLS HOST1 PORT1 [HOST2 PORT2 ...]")
+        sys.exit(sumn(args))
 
     else:
         die(f"unknown command: {cmd}")
