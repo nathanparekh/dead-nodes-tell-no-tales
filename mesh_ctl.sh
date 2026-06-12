@@ -6,7 +6,9 @@
 # its own sidecar ("sidecar-ctl"). This is the operator's hand on the mesh:
 # warm peer pairs, transfer, reset, and sum across nodes A/B/C.
 #
-# Usage: ./mesh_ctl.sh <counter.py args...>
+# Usage: ./mesh_ctl.sh bootstrap [per_node]   |   ./mesh_ctl.sh <counter.py args...>
+#   ./mesh_ctl.sh bootstrap          # reset all to 10, warm every pair, verify total 30
+#   ./mesh_ctl.sh bootstrap 100      # same, but 100 per node (total 300)
 #   ./mesh_ctl.sh reset 10.24.24.10 5000 100
 #   ./mesh_ctl.sh transfer 10.24.24.10 5000 10.24.24.11 5000 5
 #   ./mesh_ctl.sh sum 10.24.24.10 5000 10.24.24.11 5000 10.24.24.12 5000 300 5000 3
@@ -18,8 +20,9 @@ set -u
 MESH_NET="${MESH_NET:-vlan}"
 
 if [ "$#" -lt 1 ]; then
-    echo "Usage: $0 <counter.py args...>"
-    echo "Example: $0 transfer 10.24.24.10 5000 10.24.24.11 5000 5"
+    echo "Usage: $0 bootstrap [per_node]   |   $0 <counter.py args...>"
+    echo "Example: $0 bootstrap"
+    echo "         $0 transfer 10.24.24.10 5000 10.24.24.11 5000 5"
     exit 1
 fi
 
@@ -61,5 +64,25 @@ if ! sudo podman container exists mesh-ctl || \
     sleep 1  # give the sidecar a moment to install its TPROXY rules
 fi
 
-# 3. Exec counter.py with the operator's args (counter.py lives at /test).
-sudo podman exec mesh-ctl ./counter.py "$@"
+# 3. Run the command (counter.py lives at /test). `bootstrap` is a convenience
+#    verb for the whole "drive the mesh" step: reset all three nodes, warm every
+#    directed pair (a ring of +1 transfers that nets to zero -- total unchanged,
+#    every sidecar learns every peer), then verify the conserved total. Any other
+#    args are passed straight through to counter.py.
+cexec() { sudo podman exec mesh-ctl ./counter.py "$@"; }
+
+if [ "$1" = "bootstrap" ]; then
+    PER_NODE="${2:-10}"
+    EXPECTED=$(( PER_NODE * 3 ))
+    echo "[*] bootstrap: reset all -> $PER_NODE, warm A->B->C->A, verify total=$EXPECTED"
+    cexec reset 10.24.24.10 5000 "$PER_NODE"                            && \
+    cexec reset 10.24.24.11 5000 "$PER_NODE"                            && \
+    cexec reset 10.24.24.12 5000 "$PER_NODE"                            && \
+    cexec transfer 10.24.24.10 5000 10.24.24.11 5000 1                  && \
+    cexec transfer 10.24.24.11 5000 10.24.24.12 5000 1                  && \
+    cexec transfer 10.24.24.12 5000 10.24.24.10 5000 1                  && \
+    cexec sum 10.24.24.10 5000 10.24.24.11 5000 10.24.24.12 5000 "$EXPECTED" 5000 3
+    exit $?
+fi
+
+cexec "$@"

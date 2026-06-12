@@ -74,8 +74,14 @@ running its own `counter-<suffix>`, `sidecar-<suffix>`, and a receiver on
 
 Pick any one node as the control node; `mesh_ctl.sh` brings up a control
 container + sidecar at `10.24.24.200` on `MESH_NET` and runs `counter.py`
-against the mesh. Reset all three to 10, WARM every directed pair, then verify
-the total.
+against the mesh. The whole step is one command:
+
+```bash
+./mesh_ctl.sh bootstrap          # reset all to 10, warm every pair, verify total 30
+# ./mesh_ctl.sh bootstrap 100    # optional: 100 per node (total 300)
+```
+
+`bootstrap` is exactly the chain below — run the pieces by hand if you prefer:
 
 ```bash
 # reset every node to 10 (total = 30)
