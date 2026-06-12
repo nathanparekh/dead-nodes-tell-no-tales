@@ -61,6 +61,7 @@ def snapshot_trigger(node: str, snapshot_id: str) -> None:
     # backslashes can reach the python -c snippet. Any mesh-subnet destination is
     # TPROXY-redirected to the sidecar's intercept port, so the .250 sentinel host
     # need not exist.
+    # TODO: i guess this is fine tho
     snippet = (
         "import socket\n"
         "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
