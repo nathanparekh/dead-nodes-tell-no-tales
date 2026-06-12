@@ -74,11 +74,32 @@ load_loop() {
     done
 }
 
-# 1. Bring up the control container (mesh_ctl.sh starts mesh-ctl + sidecar-ctl
-#    on first use) and reset every node to 10.
-echo "[*] Bringing up control container and resetting all 6 nodes to $PER_NODE..."
-./mesh_ctl.sh reset "${IPS[0]}" "$PORT" "$PER_NODE" >/dev/null
-for ip in "${IPS[@]:1}"; do ctl reset "$ip" "$PORT" "$PER_NODE" >/dev/null; done
+# Flush the neighbor (ARP) cache of every sidecar netns we can reach on THIS
+# host. A node restored by an earlier run (e.g. counter-b/.11 via test_local_b.sh)
+# comes back with a MAC that peers still have cached, so traffic to it
+# black-holes until the entry is re-resolved. Flushing forces a fresh ARP on the
+# next send. `ip neigh flush` needs NET_ADMIN, which the sidecars have (and they
+# share their app's netns), so we flush via the sidecars; `ip` ships in the image
+# (iproute2) whereas `ping` does not. Only local containers are reachable (no
+# SSH) -- that is enough here because every sender that targets a counter in this
+# test (the control container and counter-a..c) lives on this node.
+flush_neighbors() {
+    local sc
+    for sc in $(sudo podman ps --format '{{.Names}}' | grep -E '^sidecar-' || true); do
+        sudo podman exec "$sc" ip neigh flush all 2>/dev/null && echo "    flushed ARP cache in $sc"
+    done
+}
+
+# 1. Bring up the control container (mesh_ctl.sh starts mesh-ctl + sidecar-ctl on
+#    first use), flush stale ARP, then reset every node to 10.
+echo "[*] Bringing up control container..."
+./mesh_ctl.sh state "${IPS[0]}" "$PORT" >/dev/null 2>&1 || true   # spins up mesh-ctl + sidecar-ctl
+
+echo "[*] Flushing stale ARP caches (heals a node restored with a changed MAC)..."
+flush_neighbors
+
+echo "[*] Resetting all 6 nodes to $PER_NODE..."
+for ip in "${IPS[@]}"; do ctl reset "$ip" "$PORT" "$PER_NODE" >/dev/null; done
 
 # Warm the full ring so every sidecar has learned every peer (and to create real
 # in-flight/credit state for the cut to capture).

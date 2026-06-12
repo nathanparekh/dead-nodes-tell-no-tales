@@ -138,3 +138,15 @@ Then re-verify conservation by re-running step 2's checks (or just
   immediately and credits the receiver asynchronously, so a mid-flight total can
   dip below `60` for a beat. The driver polls until the total settles, so this
   does not cause a false FAIL.
+- **Stale-ARP black holes (the "always missing `.11`" symptom).** A node restored
+  by an earlier run (e.g. `counter-b`/`.11` via `test_local_b.sh`) comes back with
+  a MAC that peers still have cached, so traffic to it black-holes until the entry
+  is re-resolved. `test_6counter.sh` now flushes the ARP cache of every local
+  sidecar netns (`ip neigh flush all`) at startup, which forces a fresh ARP on the
+  next send — this is why it heals on its own. Note the flush can only reach
+  containers on the node running the driver; that is enough here because every
+  sender that targets a counter in this test (the control container and
+  `counter-a..c`) lives on node A. If you ever hit this by hand, use
+  `sudo podman exec sidecar-<x> ip neigh flush all` — **not** the `ping` workaround
+  in `RUNBOOK.md`: the alpine sidecar image installs only `iptables`+`iproute2`,
+  so `ping` isn't present (`ip` is).
