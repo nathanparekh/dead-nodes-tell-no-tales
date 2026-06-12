@@ -61,6 +61,17 @@ if [ "$PROXY" = true ]; then
     fi
     NETWORK_ARGS+=(--network "$BREAKOUT_NET")
 
+    # Keep a tiny always-on container on the breakout network so its bridge --
+    # and the 10.99.0.1 gateway the receiver binds -- stays up even when the app
+    # containers are stopped for a restore. Without it, stopping the apps drops
+    # the bridge and the host (run_restore.sh) can no longer reach the receiver
+    # (which still "listens" via IP_FREEBIND on an address nothing can route to).
+    if [ "$(sudo podman inspect -f '{{.State.Running}}' breakout-anchor 2>/dev/null)" != "true" ]; then
+        echo "[*] Starting breakout-anchor (keeps the breakout bridge up)"
+        sudo podman run -d --replace --name breakout-anchor \
+            --network "$BREAKOUT_NET" --entrypoint sleep sidecar infinity
+    fi
+
     # Ensure THIS node's local breakout receiver is running on the host (root
     # for CRIU). Probe the port rather than pgrep -- a substring match on the
     # filename also hits editors and sudo's own wrapper, wrongly suppressing

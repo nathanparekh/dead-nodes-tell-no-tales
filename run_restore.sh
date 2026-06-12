@@ -49,6 +49,21 @@ breakout_ok() { # usage: breakout_ok <endpoint> <json-body>
     echo
 }
 
+# The receiver's address (10.99.0.1) is the podman breakout-bridge gateway, which
+# podman keeps up only while a container is on that bridge -- and restore stops
+# the apps. Keep a tiny anchor container on the breakout network so the bridge,
+# and 10.99.0.1, stay up (otherwise the receiver "listens" via IP_FREEBIND on an
+# address nothing can route to).
+if [ "$(sudo podman inspect -f '{{.State.Running}}' breakout-anchor 2>/dev/null)" != "true" ]; then
+    echo "[*] Starting breakout-anchor (keeps 10.99.0.1 up during restore)"
+    sudo podman network exists breakout 2>/dev/null || \
+        sudo podman network create --subnet 10.99.0.0/24 --gateway 10.99.0.1 breakout
+    sudo podman run -d --replace --name breakout-anchor \
+        --network breakout --entrypoint sleep sidecar infinity \
+        || echo "WARN: could not start breakout-anchor (is the 'sidecar' image built on this node?)"
+    sleep 1
+fi
+
 # Ensure THIS node's breakout receiver is RESPONSIVE (restore drives the LOCAL
 # receiver). It is single-threaded, so a slow/hung podman op (checkpoint/restore)
 # blocks it and /health can time out even though it is alive and holding the port
