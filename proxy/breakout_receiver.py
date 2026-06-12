@@ -10,6 +10,7 @@ single-threaded server serializes concurrent requests.
   POST /stop             {"container_id": ...}
   POST /snapshot_trigger {"node": ..., "snapshot_id": ...}
   POST /snapshot_state   <artifact dict>
+  POST /run_sidecar      {"node": ..., "snapshot_id": ...}
   GET  /snapshot/<snapshot_id>
   GET  /health
 
@@ -35,6 +36,10 @@ CONTAINER_ID_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
 # Filled in by main() from --mesh-subnet; MESH_BASE is the first three octets.
 MESH_SUBNET = "10.24.24.0/24"
 MESH_BASE = "10.24.24"
+
+# Filled in by main() from --host/--port; the restore-mode sidecar reads its
+# artifact back from this same receiver, so it must be told where we live.
+BREAKOUT_URL = "http://10.99.0.1:8989"
 
 
 def run(argv: list) -> None:
@@ -71,11 +76,30 @@ def snapshot_trigger(node: str, snapshot_id: str) -> None:
     run(["sudo", "podman", "exec", f"counter-{node}", "python3", "-c", snippet])
 
 
+def run_sidecar(node: str, snapshot_id: str) -> None:
+    # node/snapshot_id are field_ok-validated (CONTAINER_ID_RE), so they are safe
+    # to interpolate into the container name / env values below. The sidecar joins
+    # the already-restored app's netns and self-gates on RESTORE_SNAPSHOT_ID to
+    # replay this node's recorded channel before serving live traffic. Sidecars are
+    # never CRIU'd, so --replace just clears any leftover from a prior restore.
+    run(["sudo", "podman", "run", "-d", "--replace",
+         "--name", f"sidecar-{node}",
+         "--network", f"container:counter-{node}",
+         "--cap-add", "NET_ADMIN",
+         "--sysctl", "net.ipv4.ip_nonlocal_bind=1",
+         "-e", f"MESH_SUBNET={MESH_SUBNET}",
+         "-e", f"BREAKOUT_URL={BREAKOUT_URL}",
+         "-e", f"CHECKPOINT_TARGET=counter-{node}",
+         "-e", f"RESTORE_SNAPSHOT_ID={snapshot_id}",
+         "sidecar"])
+
+
 ROUTES = {
     "/checkpoint": (checkpoint, ("target_id", "export_path")),
     "/restore": (restore, ("target_path",)),
     "/stop": (stop, ("container_id",)),
     "/snapshot_trigger": (snapshot_trigger, ("node", "snapshot_id")),
+    "/run_sidecar": (run_sidecar, ("node", "snapshot_id")),
 }
 
 
@@ -205,7 +229,7 @@ class InternalHTTPServer(HTTPServer):
 
 
 def main() -> None:
-    global MESH_SUBNET, MESH_BASE
+    global MESH_SUBNET, MESH_BASE, BREAKOUT_URL
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="10.99.0.1",
                         help="internal interface address to bind (default: breakout bridge gateway)")
@@ -215,6 +239,7 @@ def main() -> None:
     args = parser.parse_args()
     MESH_SUBNET = args.mesh_subnet
     MESH_BASE = ".".join(MESH_SUBNET.split("/")[0].split(".")[:3])
+    BREAKOUT_URL = f"http://{args.host}:{args.port}"
     server = InternalHTTPServer((args.host, args.port), BreakoutHandler)
     logging.info("breakout receiver listening on %s:%s", args.host, args.port)
     server.serve_forever()

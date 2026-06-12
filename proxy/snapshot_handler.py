@@ -16,6 +16,11 @@ CHECKPOINT_REQUEST_TIMEOUT_S = 120
 # sidecar shares the app's network namespace but not its UTS, so gethostname()
 # returns the sidecar's own id, which is the wrong target.
 CHECKPOINT_TARGET = os.environ.get("CHECKPOINT_TARGET")
+# When set, this sidecar is a fresh restore-mode recorder: on startup it loads
+# this snapshot's artifact for THIS node (identity = CHECKPOINT_TARGET), seeds
+# per-peer send_seq/recv_seq, and replays the recorded channel into the local
+# app before serving live traffic. Unset/empty -> normal live sidecar (no-op).
+RESTORE_SNAPSHOT_ID = os.environ.get("RESTORE_SNAPSHOT_ID")
 
 class SnapshotController:
     def __init__(self, proxy_instance):
@@ -162,6 +167,89 @@ class SnapshotController:
         except Exception as e:
             print(f"[!] CHECKPOINT FAILED for snapshot {snapshot_id} "
                   f"({type(e).__name__}: {e}); no app state was saved")
+
+    def restore_from_artifact(self):
+        """
+        Restore this node's Chandy-Lamport cut from the durably-stored artifact.
+
+        SELF-GATES on RESTORE_SNAPSHOT_ID: a normal live sidecar leaves it unset,
+        so this returns immediately and MeshProxy.start() can call it
+        unconditionally. When set, this sidecar is a fresh restore-mode recorder
+        whose app was just CRIU-restored; before serving live traffic it:
+          - GETs {BREAKOUT_URL}/snapshot/<id> and finds the entry for THIS node
+            (node identity = CHECKPOINT_TARGET),
+          - seeds each peer's send_seq/recv_seq (skipping nulls), and
+          - replays each peer's recorded channel into the local app once, in
+            ascending seq order.
+        Because every node restores to the SAME cut, sender send_seq and receiver
+        recv_seq match by construction, so unacked/recv_buffer are NOT restored.
+
+        Any failure here is logged LOUDLY but swallowed (same discipline as
+        _trigger_app_snapshot_out_of_band / _post_artifact): a failed restore must
+        not crash the fresh sidecar, which would take down its restored app too.
+        """
+        if not RESTORE_SNAPSHOT_ID:
+            return
+
+        # Catch everything, including ValueError from a malformed BREAKOUT_URL
+        # at Request() construction and http.client.HTTPException from urlopen.
+        try:
+            request = urllib.request.Request(
+                f"{BREAKOUT_URL}/snapshot/{RESTORE_SNAPSHOT_ID}"
+            )
+            with urllib.request.urlopen(
+                request, timeout=CHECKPOINT_REQUEST_TIMEOUT_S
+            ) as response:
+                snapshot = json.loads(response.read().decode("utf-8"))
+
+            node = None
+            for entry in snapshot.get("nodes", []):
+                if entry.get("node") == CHECKPOINT_TARGET:
+                    node = entry
+                    break
+
+            if node is None:
+                print(f"[!] RESTORE: no artifact for node {CHECKPOINT_TARGET} in "
+                      f"snapshot {RESTORE_SNAPSHOT_ID}; nothing to restore")
+                return
+
+            peers = node.get("peers", {})
+            replayed = 0
+            for peer_ip, peer_artifact in peers.items():
+                peer_state = self.proxy.get_peer(peer_ip)
+                # Skip nulls: the matching cut coordinate on the other side may
+                # not have been recorded for this channel direction.
+                if peer_artifact.get("send_seq") is not None:
+                    peer_state.send_seq = peer_artifact["send_seq"]
+                if peer_artifact.get("recv_seq") is not None:
+                    peer_state.recv_seq = peer_artifact["recv_seq"]
+
+            for peer_ip, peer_artifact in peers.items():
+                # These were received+ACKed before the cut; recording only
+                # deferred their delivery, so replay = deliver in seq order.
+                channel = sorted(
+                    peer_artifact.get("channel", []), key=lambda m: m["seq"]
+                )
+                for msg in channel:
+                    payload = base64.b64decode(msg["payload_b64"])
+                    self.proxy.process_and_deliver(
+                        msg["seq"],
+                        payload,
+                        peer_ip,
+                        msg["src_port"],
+                        msg["dst_port"],
+                        msg["target_local_ip"],
+                    )
+                    replayed += 1
+
+            print(f"[*] RESTORE complete for snapshot {RESTORE_SNAPSHOT_ID} "
+                  f"(node {CHECKPOINT_TARGET}): {len(peers)} peers restored, "
+                  f"{replayed} messages replayed")
+        except Exception as e:
+            print(f"[!] RESTORE FAILED for snapshot {RESTORE_SNAPSHOT_ID} "
+                  f"(node {CHECKPOINT_TARGET}) "
+                  f"({type(e).__name__}: {e}); sidecar will serve live traffic "
+                  f"WITHOUT restored channel state")
 
     def check_timeout(self):
         """Abort a snapshot whose markers never all came back. Called periodically."""

@@ -198,6 +198,11 @@ class MeshProxy:
         )
         asyncio.create_task(self._retransmit_loop())
 
+        # Whole-system restore: replay this node's snapshot artifact into the
+        # local app. Self-gates on RESTORE_SNAPSHOT_ID, so this is a no-op when
+        # not restoring.
+        self.snapshot_ctrl.restore_from_artifact()
+
     def _forward_intercepted(self, data, ancdata, addr):
         """Route one intercepted app datagram: tunnel if mesh-bound, else direct spoofed send."""
         orig_src_port = addr[1]
