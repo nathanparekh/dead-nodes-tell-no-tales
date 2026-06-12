@@ -50,16 +50,20 @@ class SnapshotController:
                 self.is_snapshotting = True
                 self.current_snapshot_id = marker_id
 
-                # Flush any app-emitted datagrams still pending on the intercept
-                # socket so they get PRE-marker seqs (i.e. land on the sending
-                # side of this outbound channel cut, not in the recorded state).
-                self.proxy.drain_intercept()
-
                 self.channel_states.clear()
                 self.recorded_send_seq = {}
                 self.recorded_recv_seq = {}
                 self.recording_channels = set(self.proxy.peers.keys())
                 self.recording_channels.discard(remote_ip)
+
+                # Flush any app-emitted datagrams still pending on the intercept
+                # socket so they get PRE-marker seqs (i.e. land on the sending
+                # side of this outbound channel cut, not in the recorded state).
+                # TODO: maybe consider if we want to change this later
+                self.proxy.drain_intercept()
+
+                # Trigger the app's CRIU checkpoint
+                self._trigger_app_snapshot_out_of_band(marker_id.decode())
 
                 for peer_ip, peer_state in self.proxy.peers.items():
                     # Chandy-Lamport: emit the marker on EVERY outgoing channel,
@@ -88,13 +92,6 @@ class SnapshotController:
                 # Now waiting for each peer's marker; bound that wait so a peer
                 # that dies mid-snapshot can't pin is_snapshotting=True forever.
                 self.snapshot_deadline = time.time() + SNAPSHOT_TIMEOUT
-
-                # Trigger the app's CRIU checkpoint AFTER broadcasting markers.
-                # Any datagram the app emits between this broadcast and the dump's
-                # freeze is a knowingly-accepted microsecond race: this is the
-                # pragmatic outbound-boundary ordering, not the airtight
-                # freeze-drain-dump version.
-                self._trigger_app_snapshot_out_of_band(marker_id.decode())
 
                 if not self.recording_channels:
                     self._finish_global_snapshot()
