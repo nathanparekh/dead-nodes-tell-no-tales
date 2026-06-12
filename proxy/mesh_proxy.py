@@ -136,6 +136,25 @@ class TunnelProtocol(asyncio.DatagramProtocol):
                     f"[<-] seq {seq} from {remote_ip} (recv_seq {peer.recv_seq}) DUPLICATE/STALE. Dropping (ACKed)..."
                 )
 
+        # Incoming PLAIN Packet (17-byte header, Seq unused). Best-effort client
+        # traffic: deliver immediately, no ACK, no in-order gate, no recv_buffer,
+        # and never recorded by the snapshot (never part of the Chandy-Lamport cut).
+        elif msg_type == 2:
+            if len(data) < DATA_HEADER.size:
+                return
+
+            _, _, orig_src_port, orig_dst_port, target_ip_bytes = DATA_HEADER.unpack(
+                data[:DATA_HEADER.size]
+            )
+            exact_local_ip = socket.inet_ntoa(target_ip_bytes)
+            payload = data[DATA_HEADER.size:]
+
+            print(
+                f"[<-] plain seq-less from {remote_ip}. Spoofing delivery to {exact_local_ip}:{orig_dst_port}..."
+            )
+            spoof_sock = self.proxy.get_spoof_sock(remote_ip, orig_src_port)
+            spoof_sock.sendto(payload, (exact_local_ip, orig_dst_port))
+
         # Incoming ACK Packet (9-byte header: Type(1) + Seq(8))
         elif msg_type == 1:
             if len(data) < ACK_HEADER.size:
@@ -157,6 +176,13 @@ class MeshProxy:
         self.snapshot_ctrl = SnapshotController(self)
 
         self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)
+
+        # True only when THIS sidecar's own mesh IP is a static member (a counter
+        # app sidecar). RUDP is reserved for server<->server flows; the control
+        # container and the test client are non-members and stay plain. Resolved
+        # in start() once snapshot_ctrl can detect the self IP. None self IP ->
+        # not-a-server (plain), the safe default for the client.
+        self.is_server = False
 
     def get_peer(self, ip):
         if ip not in self.peers:
@@ -207,8 +233,33 @@ class MeshProxy:
         peer_state.unacked[peer_state.send_seq] = (time.time(), packet)
         peer_state.send_seq += 1
 
+    def _use_rudp(self, peer_ip):
+        """RUDP applies ONLY between servers: this node is a member AND the peer is.
+
+        Any flow where either end is a non-member (control container, test
+        client) is best-effort plain instead.
+        """
+        return self.is_server and (peer_ip in MESH_MEMBERS)
+
+    def send_plain(self, peer_ip, src_port, dst_port, target_ip_bytes, payload):
+        """Frame a Type-2 plain data packet and fire it on the tunnel once.
+
+        Reuses the DATA_HEADER layout with the Seq field unused (packed 0). No
+        send_seq, no unacked tracking, no retransmit -- the app retries on loss.
+        """
+        packet = DATA_HEADER.pack(2, 0, src_port, dst_port, target_ip_bytes) + payload
+        print(f"[->] plain to {peer_ip} ({len(payload)}b)")
+        self.tunnel_transport.sendto(packet, (peer_ip, TUNNEL_PORT))
+
     async def start(self):
         loop = asyncio.get_running_loop()
+
+        # Resolve server-ness once: only a sidecar whose own mesh IP is a static
+        # member runs RUDP, and then only toward other members. A None self IP
+        # (detection failed, or this is the client) falls through to not-a-server.
+        self_ip = self.snapshot_ctrl._self_mesh_ip()
+        self.is_server = self_ip in MESH_MEMBERS
+        print(f"[*] self mesh IP {self_ip}; is_server={self.is_server}")
 
         self.local_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.local_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -250,11 +301,19 @@ class MeshProxy:
             # DIRECT ROUTING LOGIC (No probing)
             if ipaddress.ip_address(target_ip) in self.mesh_network:
                 # ASSUME PROXY EXISTS: Wrap and send via tunnel
-                peer = self.get_peer(target_ip)
                 target_ip_bytes = socket.inet_aton(target_ip)
-                self.send_data(
-                    target_ip, peer, orig_src_port, target_port, target_ip_bytes, data
-                )
+                if self._use_rudp(target_ip):
+                    # SERVER -> SERVER: reliable, in-order RUDP.
+                    peer = self.get_peer(target_ip)
+                    self.send_data(
+                        target_ip, peer, orig_src_port, target_port, target_ip_bytes, data
+                    )
+                else:
+                    # Either end is a non-member (control container / client):
+                    # best-effort plain, no seq/ACK/retransmit.
+                    self.send_plain(
+                        target_ip, orig_src_port, target_port, target_ip_bytes, data
+                    )
             else:
                 # OUTSIDE SUBNET: Handle normally (direct spoofed send)
                 spoof_sock = self.get_spoof_sock(orig_src_ip, orig_src_port)
