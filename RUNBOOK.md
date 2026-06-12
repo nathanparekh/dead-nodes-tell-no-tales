@@ -188,6 +188,14 @@ and restore were globally consistent:
 - **The breakout receiver is local to each node.** `10.99.0.1` is each node's
   OWN bridge gateway; `http://10.99.0.1:8989` always means "this node's
   receiver." `build.sh` starts it per node.
+- **Redeploying one node mid-run.** `build.sh` pins a deterministic MAC per node
+  (`02:00:0a:18:18:<last-octet>`) so a redeploy reuses the same MAC and stays
+  reachable. If you ever redeploy with a *changed* MAC (or hit a stale-ARP
+  black hole where a just-redeployed node gets no traffic), re-announce it by
+  pinging outward from that node to **all** peers, e.g.
+  `sudo podman exec sidecar-b ping -c2 10.24.24.10` (and `.12`, `.200`). Note a
+  lost in-flight credit is **not** dropped — RUDP holds it in the sender's
+  `unacked` and the total reconciles once the path is restored.
 - **Snapshot/restore semantics.** Sidecars are NEVER CRIU'd. The cut for a node
   = (its app CRIU image) + (its recorded channel state with send/recv seq
   coordinates). On restore the app is brought back from its image and a FRESH

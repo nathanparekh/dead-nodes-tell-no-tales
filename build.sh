@@ -38,6 +38,12 @@ ASCII_VAL=$(printf "%d" "'$CHAR_LOWER")
 IP_SUFFIX=$((ASCII_VAL - 97 + 10))
 IP="10.24.24.$IP_SUFFIX"
 MESH_SUBNET="10.24.24.0/24"
+# Deterministic, locally-administered MAC derived from the mesh IP so a redeploy
+# REUSES the same MAC instead of getting a fresh one -- otherwise peers keep
+# sending to the stale MAC until the node re-announces itself (the stale-ARP
+# black hole that drops all traffic to a just-redeployed node). 0a:18:18 ==
+# 10.24.24; last octet == IP_SUFFIX (e.g. b -> 02:00:0a:18:18:0b).
+MESH_MAC=$(printf '02:00:0a:18:18:%02x' "$IP_SUFFIX")
 
 # Remove only the app and sidecar containers if they exist
 # sudo podman rm -fa
@@ -47,7 +53,7 @@ echo "=== Deploying Container $APP_NAME ==="
 # The sidecar's snapshot handler calls the host's breakout receiver, and it
 # shares the app container's network namespace — so the app container gets
 # the breakout bridge attached when (and only when) it carries a sidecar.
-NETWORK_ARGS=(--network "$MESH_NET:ip=$IP")
+NETWORK_ARGS=(--network "$MESH_NET:ip=$IP,mac=$MESH_MAC")
 if [ "$PROXY" = true ]; then
     if ! sudo podman network exists "$BREAKOUT_NET"; then
         echo "[*] Creating breakout network ($BREAKOUT_GW)"
