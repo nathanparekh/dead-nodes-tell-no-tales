@@ -43,9 +43,10 @@ fi
 #    that time must NOT eat into the after-the-cut window. Killed on any exit.
 LOAD_SECS=$(( BEFORE_S + AFTER_S + 30 ))
 banner "2/8 starting background load for ${LOAD_SECS}s (transfers before+during+after the cut)"
-./mesh_ctl.sh load "$LOAD_SECS" 100 1 &
+./mesh_ctl.sh load "$LOAD_SECS" 0 1 &
 LOAD_PID=$!
-trap 'kill "$LOAD_PID" 2>/dev/null || true' EXIT
+# On any exit path, halt the in-container loadgen promptly AND reap the wrapper.
+trap './mesh_ctl.sh stoploadgen 2>/dev/null || true; kill "$LOAD_PID" 2>/dev/null || true' EXIT
 echo "[*] load running as PID $LOAD_PID"
 
 # 3. Let transactions flow BEFORE the cut.
@@ -66,6 +67,7 @@ sleep "$AFTER_S"
 # 6. Stop the load. It also self-terminates by duration; reap it so the EXIT
 #    trap has nothing left to kill.
 banner "6/8 stopping background load"
+./mesh_ctl.sh stoploadgen 2>/dev/null || true   # halt the in-container loadgen promptly
 kill "$LOAD_PID" 2>/dev/null || true
 wait "$LOAD_PID" 2>/dev/null || true
 

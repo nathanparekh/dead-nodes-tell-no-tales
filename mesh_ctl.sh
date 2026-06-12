@@ -16,7 +16,8 @@
 # 6-node snapshot test (counter-a..f at 10.24.24.10..15):
 #   ./mesh_ctl.sh bootstrap6 [per_node]      # reset .10..15, warm the ring, verify total 6*per_node
 #   ./mesh_ctl.sh sum6 [expected]            # verify total across all six (default 60)
-#   ./mesh_ctl.sh load <seconds> [delay_ms] [amount]   # continuous ring transfers (backgroundable)
+#   ./mesh_ctl.sh load <seconds> [delay_ms] [amount]   # high-rate in-container ring transfers (backgroundable)
+#   ./mesh_ctl.sh stoploadgen                # signal a backgrounded `load` to stop promptly
 #
 # Honors env MESH_NET (default "vlan"); the operator pre-creates that overlay.
 
@@ -93,6 +94,9 @@ fi
 # The six member IPs for the 6-node snapshot test (counter-a .. counter-f), all
 # on app port 5000. Used by bootstrap6/sum6/load below.
 MEMBERS=(10.24.24.10 10.24.24.11 10.24.24.12 10.24.24.13 10.24.24.14 10.24.24.15)
+# The same members expanded as "<ip> 5000" host/port pairs, for sumn/loadgen.
+MEMBER_PAIRS=()
+for _ip in "${MEMBERS[@]}"; do MEMBER_PAIRS+=("$_ip" 5000); done
 
 if [ "$1" = "bootstrap6" ]; then
     PER_NODE="${2:-10}"
@@ -111,53 +115,40 @@ if [ "$1" = "bootstrap6" ]; then
         cexec transfer "$from" 5000 "$to" 5000 1 || exit $?
     done
     # Verify the conserved total across all six.
-    cexec sumn "$EXPECTED" 5000 3 \
-        10.24.24.10 5000 10.24.24.11 5000 10.24.24.12 5000 \
-        10.24.24.13 5000 10.24.24.14 5000 10.24.24.15 5000
+    cexec sumn "$EXPECTED" 5000 3 "${MEMBER_PAIRS[@]}"
     exit $?
 fi
 
 if [ "$1" = "sum6" ]; then
     EXPECTED="${2:-60}"
     echo "[*] sum6: verify total across .10..15 == $EXPECTED"
-    cexec sumn "$EXPECTED" 5000 3 \
-        10.24.24.10 5000 10.24.24.11 5000 10.24.24.12 5000 \
-        10.24.24.13 5000 10.24.24.14 5000 10.24.24.15 5000
+    cexec sumn "$EXPECTED" 5000 3 "${MEMBER_PAIRS[@]}"
     exit $?
 fi
 
 if [ "$1" = "load" ]; then
-    # load <seconds> [delay_ms] [amount]: continuously dispatch transfers around
-    # the six-member ring for <seconds> wall-clock. Meant to be backgrounded by
-    # the test (runs before/during/after the snapshot). Each transfer conserves
-    # money, so the live total stays constant throughout.
+    # load <seconds> [delay_ms] [amount]: drive continuous ring transfers among
+    # the six members for <seconds> wall-clock. The loop runs INSIDE the control
+    # container as ONE long-lived `loadgen` process (no per-transfer podman exec),
+    # so the rate is bounded by mesh RTT, not exec startup -- ~100x the old rate.
+    # Meant to be backgrounded by the test (before/during/after the snapshot);
+    # every transfer conserves money, so the live total stays constant. For a
+    # prompt stop use `stoploadgen` (loadgen also self-terminates at <seconds>).
     SECONDS_TO_RUN="${2:-}"
-    DELAY_MS="${3:-100}"
+    DELAY_MS="${3:-0}"
     AMOUNT="${4:-1}"
     if [ -z "$SECONDS_TO_RUN" ]; then
         echo "Usage: $0 load <seconds> [delay_ms] [amount]"
         exit 1
     fi
-    n=${#MEMBERS[@]}
-    end=$(( $(date +%s) + SECONDS_TO_RUN ))
-    # Fractional sleep interval (delay_ms milliseconds) as decimal seconds.
-    interval="$(awk "BEGIN{printf \"%.3f\", $DELAY_MS/1000}")"
-    echo "[load] dispatching ring transfers of $AMOUNT for ${SECONDS_TO_RUN}s (delay ${DELAY_MS}ms)"
-    i=0
-    while [ "$(date +%s)" -lt "$end" ]; do
-        from="${MEMBERS[$(( i % n ))]}"
-        to="${MEMBERS[$(( (i + 1) % n ))]}"
-        txid="ld$i"
-        # Tolerate nonzero: the control reply may time out under load, but the
-        # debit+credit still happen on the apps. Never abort the loop.
-        cexec transfer "$from" 5000 "$to" 5000 "$AMOUNT" "$txid" >/dev/null 2>&1 || true
-        i=$(( i + 1 ))
-        if [ $(( i % 25 )) -eq 0 ]; then
-            echo "[load] dispatched $i transfers"
-        fi
-        sleep "$interval"
-    done
-    echo "[load] done after $i transfers"
+    cexec loadgen "$SECONDS_TO_RUN" "$DELAY_MS" "$AMOUNT" "${MEMBER_PAIRS[@]}"
+    exit $?
+fi
+
+if [ "$1" = "stoploadgen" ]; then
+    # Signal an in-container loadgen (started by `load`) to halt promptly by
+    # dropping its stop sentinel; `touch` is in busybox, so no procps needed.
+    sudo podman exec mesh-ctl touch /tmp/loadgen.stop 2>/dev/null || true
     exit 0
 fi
 

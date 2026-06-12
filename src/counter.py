@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import os
 import socket
 import time
 
@@ -98,12 +99,14 @@ def state(host, port):
     print(reply)
     return 0
 
-def transfer(from_host, from_port, to_host, to_port, amount, txid="tx123"):
+def transfer(from_host, from_port, to_host, to_port, amount, txid="tx123",
+             verbose=True, timeout_ms=1000):
     msg = f"TRANSFER {txid} {to_host} {to_port} {amount}"
-    reply = request_udp(from_host, from_port, msg, 1000)
+    reply = request_udp(from_host, from_port, msg, timeout_ms)
     if reply is None:
         return 1
-    print(reply)
+    if verbose:
+        print(reply)
     return 0 if reply.startswith("OK") else 1
 
 def reset_counter(host, port, amount):
@@ -200,9 +203,59 @@ def sumn(args):
 
     return 1
 
+def loadgen(args):
+    """High-rate, in-process transfer load generator.
+
+    Runs INSIDE the control container, so there is no per-transfer `podman exec`
+    overhead -- the rate is bounded by mesh RTT, not exec startup (~100x the old
+    one-exec-per-transfer driver).
+
+    args: DURATION_S DELAY_MS AMOUNT HOST1 PORT1 [HOST2 PORT2 ...]. Dispatches a
+    round-robin ring of transfers (members[i] -> members[i+1]) back-to-back for
+    DURATION_S seconds; each is a fast request/reply with a short timeout so a
+    lost reply barely stalls the loop. Every transfer conserves money. Stops
+    early if the sentinel /tmp/loadgen.stop appears (the harness touches it for a
+    prompt teardown). Per-transfer output is suppressed; prints periodic progress.
+    """
+    duration_s = float(args[0])
+    delay_ms = float(args[1])
+    amount = int(args[2])
+    pairs = [(args[i], args[i + 1]) for i in range(3, len(args), 2)]
+    n = len(pairs)
+
+    stop_file = "/tmp/loadgen.stop"
+    try:
+        os.remove(stop_file)  # clear any sentinel left by a previous run
+    except OSError:
+        pass
+
+    delay_s = delay_ms / 1000.0
+    deadline = time.time() + duration_s
+    i = 0
+    sent = 0
+    print(f"loadgen: {n} members, amount={amount}, delay={delay_ms}ms, "
+          f"duration={duration_s}s", flush=True)
+    while time.time() < deadline:
+        if os.path.exists(stop_file):
+            print("loadgen: stop sentinel seen; halting", flush=True)
+            break
+        from_host, from_port = pairs[i % n]
+        to_host, to_port = pairs[(i + 1) % n]
+        # Short timeout + quiet keeps the loop fast even if a reply is dropped.
+        transfer(from_host, from_port, to_host, to_port, amount,
+                 f"ld{i}", verbose=False, timeout_ms=300)
+        sent += 1
+        i += 1
+        if sent % 100 == 0:
+            print(f"loadgen: dispatched {sent} transfers", flush=True)
+        if delay_s > 0:
+            time.sleep(delay_s)
+    print(f"loadgen: done, dispatched {sent} transfers", flush=True)
+    return 0
+
 def main():
     if len(sys.argv) < 2:
-        die(f"usage: {sys.argv[0]} node|state|transfer|reset|sum|sumn ...")
+        die(f"usage: {sys.argv[0]} node|state|transfer|reset|sum|sumn|loadgen ...")
 
     cmd = sys.argv[1]
 
@@ -239,6 +292,14 @@ def main():
         if len(args) < 5 or (len(args) - 3) % 2 != 0:
             die(f"usage: {sys.argv[0]} sumn EXPECTED TIMEOUT_MS STABLE_POLLS HOST1 PORT1 [HOST2 PORT2 ...]")
         sys.exit(sumn(args))
+
+    elif cmd == "loadgen":
+        args = sys.argv[2:]
+        # Need DURATION_S DELAY_MS AMOUNT plus an even number of HOST/PORT args
+        # (at least one pair).
+        if len(args) < 5 or (len(args) - 3) % 2 != 0:
+            die(f"usage: {sys.argv[0]} loadgen DURATION_S DELAY_MS AMOUNT HOST1 PORT1 [HOST2 PORT2 ...]")
+        sys.exit(loadgen(args))
 
     else:
         die(f"unknown command: {cmd}")

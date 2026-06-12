@@ -131,9 +131,12 @@ What it does, in order:
 1. `./mesh_ctl.sh bootstrap6 10` — reset all six to `per_node`, warm the
    `.10→.11→…→.15→.10` ring so every sidecar has live peer state, and verify the
    starting total is `6*per_node` (= 60). Aborts if this fails.
-2. Starts `./mesh_ctl.sh load <before_s+after_s+5> 100 1` in the BACKGROUND so
-   transfers flow before, during, and after the cut (trapped to be killed on
-   exit).
+2. Starts `./mesh_ctl.sh load <before_s+after_s+30> 0 1` in the BACKGROUND so
+   transfers flow before, during, and after the cut. The loop runs INSIDE the
+   control container as one long-lived `loadgen` process (no per-transfer
+   `podman exec`), sustaining a high transfer rate bounded by mesh RTT rather
+   than exec startup. It is halted promptly at teardown via `stoploadgen` and
+   also self-terminates by duration.
 3. `sleep before_s` — transactions flowing BEFORE the cut.
 4. `./trigger_snapshot.sh a snap6` — node A initiates and floods markers; each
    node records its own cut to its own local `/tmp`.
