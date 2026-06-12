@@ -32,26 +32,40 @@ if [ "$#" -lt 1 ]; then
     exit 1
 fi
 
-# 1. Ensure the images exist. The control container runs counter.py from the
-#    test-runner image (WORKDIR /test); the sidecar provides TPROXY tunneling.
-if ! sudo podman image exists test-runner; then
-    echo "[*] Building test-runner image..."
-    sudo podman build --network=host -t test-runner -f Containerfile.test .
-fi
-if ! sudo podman image exists sidecar; then
-    echo "[*] Building sidecar image..."
-    sudo podman build --network=host -t sidecar -f Containerfile.rudp .
-fi
+# 1. Build the control images EVERY run (layer cache makes a no-change rebuild
+#    cheap). Guarding on "image exists" was the stale-image trap: if counter.py
+#    (or the proxy) changed, the cached image -- and any container still on it --
+#    silently kept running OLD code (e.g. `unknown command: sumn`).
+echo "[*] Building control images (cached if unchanged)..."
+sudo podman build --network=host -t test-runner -f Containerfile.test . >/dev/null \
+    || { echo "[!] test-runner build failed" >&2; exit 1; }
+sudo podman build --network=host -t sidecar -f Containerfile.rudp . >/dev/null \
+    || { echo "[!] sidecar build failed" >&2; exit 1; }
 
-# 2. Ensure the control container + its sidecar are up on the overlay.
-#    The control container holds a fixed mesh IP (10.24.24.200) so peers have a
-#    stable address to reply to. It needs the sidecar sharing its netns because
-#    the app nodes tunnel their replies back to 10.24.24.200 over RUDP/TPROXY;
-#    without the sidecar those replies would never be de-tunnelled and reads
-#    like `sum`/`state` would hang.
-if ! sudo podman container exists mesh-ctl || \
-   [ "$(sudo podman inspect -f '{{.State.Running}}' mesh-ctl 2>/dev/null)" != "true" ]; then
-    echo "[*] Starting control container mesh-ctl on $MESH_NET (10.24.24.200)"
+# 2. (Re)create the control container + its sidecar when missing, not running,
+#    OR running a STALE image (so the rebuild above actually takes effect). We
+#    recreate only on a real change -- when the image ids still match we leave
+#    the running containers alone, so a backgrounded `load` is NOT torn down by a
+#    concurrent `stoploadgen`/`sum6` call. The control container holds a fixed
+#    mesh IP (10.24.24.200); sidecar-ctl shares its netns to de-tunnel replies
+#    (the app nodes tunnel replies to 10.24.24.200 over RUDP/TPROXY, so without
+#    it reads like `sum`/`state` would hang). IDs are compared with any
+#    `sha256:` prefix stripped, since the container's .Image and the image's .Id
+#    can be formatted differently across podman versions.
+norm_id() { sed 's/^sha256://'; }
+want_runner="$(sudo podman image inspect -f '{{.Id}}' test-runner 2>/dev/null | norm_id || echo none)"
+want_side="$(sudo podman image inspect -f '{{.Id}}' sidecar 2>/dev/null | norm_id || echo none)"
+have_runner="$(sudo podman inspect -f '{{.Image}}' mesh-ctl 2>/dev/null | norm_id || echo missing)"
+have_side="$(sudo podman inspect -f '{{.Image}}' sidecar-ctl 2>/dev/null | norm_id || echo missing)"
+ctl_running="$(sudo podman inspect -f '{{.State.Running}}' mesh-ctl 2>/dev/null || echo false)"
+side_running="$(sudo podman inspect -f '{{.State.Running}}' sidecar-ctl 2>/dev/null || echo false)"
+if [ "$ctl_running" != "true" ] || [ "$side_running" != "true" ] \
+   || [ "$have_runner" != "$want_runner" ] || [ "$have_side" != "$want_side" ]; then
+    echo "[*] (re)starting control container mesh-ctl on $MESH_NET (10.24.24.200)"
+    # sidecar-ctl shares mesh-ctl's netns, so it must be removed BEFORE mesh-ctl
+    # can be replaced -- podman refuses to replace a container a dependent joins
+    # (the same trap build.sh hit with the app + its sidecar).
+    sudo podman rm -f sidecar-ctl mesh-ctl 2>/dev/null || true
     sudo podman run -d --replace \
       --name mesh-ctl \
       --network "${MESH_NET}:ip=10.24.24.200" \
