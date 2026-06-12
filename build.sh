@@ -14,7 +14,11 @@ fi
 
 BREAKOUT_NET=breakout
 BREAKOUT_GW=10.99.0.1
-BREAKOUT_URL="http://$BREAKOUT_GW:8989"
+BREAKOUT_PORT=8989
+BREAKOUT_URL="http://$BREAKOUT_GW:$BREAKOUT_PORT"
+# The app attaches to a podman network on the VXLAN overlay; the operator
+# pre-creates it and passes its NAME via MESH_NET. Default stays "vlan".
+MESH_NET="${MESH_NET:-vlan}"
 
 sudo podman build --network=host -t counter -f Containerfile.counter .
 
@@ -43,15 +47,26 @@ echo "=== Deploying Container $APP_NAME ==="
 # The sidecar's snapshot handler calls the host's breakout receiver, and it
 # shares the app container's network namespace — so the app container gets
 # the breakout bridge attached when (and only when) it carries a sidecar.
-NETWORK_ARGS=(--network "vlan:ip=$IP")
+NETWORK_ARGS=(--network "$MESH_NET:ip=$IP")
 if [ "$PROXY" = true ]; then
     if ! sudo podman network exists "$BREAKOUT_NET"; then
         echo "[*] Creating breakout network ($BREAKOUT_GW)"
         sudo podman network create --subnet 10.99.0.0/24 --gateway "$BREAKOUT_GW" "$BREAKOUT_NET"
     fi
     NETWORK_ARGS+=(--network "$BREAKOUT_NET")
-    # Note: the sidecar POSTs snapshots to the host receiver; start it with
-    # `sudo python3 proxy/breakout_receiver.py` (run_test_suite.sh does this).
+
+    # Ensure THIS node's local breakout receiver is running on the host (root
+    # for CRIU). Probe the port rather than pgrep -- a substring match on the
+    # filename also hits editors and sudo's own wrapper, wrongly suppressing
+    # startup.
+    if ! timeout 2 bash -c "exec 3<>/dev/tcp/$BREAKOUT_GW/$BREAKOUT_PORT" 2>/dev/null; then
+        echo "Starting breakout receiver on $BREAKOUT_URL..."
+        # Detach with setsid + redirect (stdin from /dev/null) so the receiver
+        # survives this deploy shell and the SSH session closing -- it is a
+        # long-lived per-node daemon, not a child of the deploy. Logs to /tmp.
+        sudo setsid python3 proxy/breakout_receiver.py --host "$BREAKOUT_GW" --port "$BREAKOUT_PORT" --mesh-subnet "$MESH_SUBNET" </dev/null >/tmp/breakout-receiver.log 2>&1 &
+        sleep 1
+    fi
 fi
 
 # 2. Launch the core application container onto the macvlan network
@@ -74,6 +89,7 @@ if [ "$PROXY" = true ]; then
       -e BREAKOUT_URL="$BREAKOUT_URL" \
       -e CHECKPOINT_TARGET="$APP_NAME" \
       sidecar
-
-    sudo podman logs -f $SIDECAR_NAME
 fi
+
+# Per-node deploy must not block; return after deploying.
+echo "deployed $APP_NAME+$SIDECAR_NAME; receiver on $BREAKOUT_URL"
