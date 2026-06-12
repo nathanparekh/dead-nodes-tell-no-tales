@@ -9,11 +9,10 @@ RUN apk add --no-cache bash curl
 COPY src/counter.py .
 
 # Copy tests layout
-COPY test/run_tests.sh run_tests
 COPY test/ .
 
-RUN chmod +x run_tests *.sh counter.py
+RUN chmod +x *.sh counter.py
 
-ENTRYPOINT ["./run_tests"]
+ENTRYPOINT ["./run_tests.sh"]
 
 STOPSIGNAL SIGKILL

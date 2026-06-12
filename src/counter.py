@@ -165,44 +165,37 @@ def sum_counters(args):
 
 def main():
     if len(sys.argv) < 2:
-        print(f"usage: {sys.argv[0]} node|state|transfer|reset|sum ...", file=sys.stderr)
-        sys.exit(1)
-        
+        die(f"usage: {sys.argv[0]} node|state|transfer|reset|sum ...")
+
     cmd = sys.argv[1]
-    
+
     if cmd == "node":
         if len(sys.argv) != 5:
-            print(f"usage: {sys.argv[0]} node NAME PORT INITIAL", file=sys.stderr)
-            sys.exit(1)
+            die(f"usage: {sys.argv[0]} node NAME PORT INITIAL")
         sys.exit(node(sys.argv[2], sys.argv[3], sys.argv[4]))
-        
+
     elif cmd == "state":
         if len(sys.argv) != 4:
-            print(f"usage: {sys.argv[0]} state HOST PORT", file=sys.stderr)
-            sys.exit(1)
+            die(f"usage: {sys.argv[0]} state HOST PORT")
         sys.exit(state(sys.argv[2], sys.argv[3]))
-        
+
     elif cmd == "transfer":
         if len(sys.argv) != 7:
-            print(f"usage: {sys.argv[0]} transfer FROM_HOST FROM_PORT TO_HOST TO_PORT AMOUNT", file=sys.stderr)
-            sys.exit(1)
+            die(f"usage: {sys.argv[0]} transfer FROM_HOST FROM_PORT TO_HOST TO_PORT AMOUNT")
         sys.exit(transfer(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]))
-        
+
     elif cmd == "reset":
         if len(sys.argv) != 5:
-            print(f"usage: {sys.argv[0]} reset HOST PORT AMOUNT", file=sys.stderr)
-            sys.exit(1)
+            die(f"usage: {sys.argv[0]} reset HOST PORT AMOUNT")
         sys.exit(reset_counter(sys.argv[2], sys.argv[3], sys.argv[4]))
-        
+
     elif cmd == "sum":
         if len(sys.argv) != 11:
-            print(f"usage: {sys.argv[0]} sum A_HOST A_PORT B_HOST B_PORT C_HOST C_PORT EXPECTED TIMEOUT_MS STABLE_POLLS", file=sys.stderr)
-            sys.exit(1)
+            die(f"usage: {sys.argv[0]} sum A_HOST A_PORT B_HOST B_PORT C_HOST C_PORT EXPECTED TIMEOUT_MS STABLE_POLLS")
         sys.exit(sum_counters(sys.argv[2:]))
-        
+
     else:
-        print(f"unknown command: {cmd}", file=sys.stderr)
-        sys.exit(1)
+        die(f"unknown command: {cmd}")
 
 if __name__ == "__main__":
     main()

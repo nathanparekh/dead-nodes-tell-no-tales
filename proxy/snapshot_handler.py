@@ -1,14 +1,16 @@
-import struct
 import time
 import os
 import urllib.request
 import json
 import socket
 
-from config import TUNNEL_PORT, SNAPSHOT_TIMEOUT
+from config import SNAPSHOT_TIMEOUT
 
 
 BREAKOUT_URL = os.environ.get("BREAKOUT_URL", "http://10.99.0.1:8989")
+# Client-side timeout for the checkpoint POST. Must be >= the receiver's
+# COMMAND_TIMEOUT_S (breakout_receiver.py) so we don't give up before it replies.
+CHECKPOINT_REQUEST_TIMEOUT_S = 120
 # The container to CRIU-checkpoint. Must be set to the *app* container id: the
 # sidecar shares the app's network namespace but not its UTS, so gethostname()
 # returns the sidecar's own id, which is the wrong target.
@@ -50,17 +52,10 @@ class SnapshotController:
                 for peer_ip, peer_state in self.proxy.peers.items():
                     if peer_ip != remote_ip:
                         print(f"[*] Broadcasting MARKER to {peer_ip}")
-                        # Must match mesh_proxy's data framing so receivers can parse it:
-                        # Type(1) + Seq(8) + SrcPort(2) + DstPort(2) + TargetIP(4) = 17 bytes
-                        header = struct.pack(
-                            "!BQHH4s", 0, peer_state.send_seq, 0, 0, b"\x00\x00\x00\x00"
+                        # Markers ride the same Type-0 data frame so receivers parse them.
+                        self.proxy.send_data(
+                            peer_ip, peer_state, 0, 0, b"\x00\x00\x00\x00", payload
                         )
-                        packet = header + payload
-                        self.proxy.tunnel_transport.sendto(
-                            packet, (peer_ip, TUNNEL_PORT)
-                        )
-                        peer_state.unacked[peer_state.send_seq] = (time.time(), packet)
-                        peer_state.send_seq += 1
 
                 for ip in self.recording_channels:
                     self.channel_states[ip] = []
@@ -129,7 +124,7 @@ class SnapshotController:
                 data=payload,
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(request, timeout=120):
+            with urllib.request.urlopen(request, timeout=CHECKPOINT_REQUEST_TIMEOUT_S):
                 pass
             print(f"[*] Host checkpointed {container_id} (snapshot {snapshot_id})")
         except Exception as e:

@@ -11,6 +11,14 @@ from config import *
 from snapshot_handler import SnapshotController
 
 
+# Tunnel wire framing — single source of truth for both pack and unpack:
+#   data: Type(1) + Seq(8) + SrcPort(2) + DstPort(2) + TargetIP(4) = 17 bytes
+#   ack:  Type(1) + Seq(8)                                          = 9 bytes
+DATA_HEADER = struct.Struct("!BQHH4s")
+ACK_HEADER = struct.Struct("!BQ")
+ZERO_IP = b"\x00\x00\x00\x00"
+
+
 class PeerState:
     """Maintain sequence and buffer state per remote node."""
 
@@ -47,22 +55,22 @@ class TunnelProtocol(asyncio.DatagramProtocol):
 
         # Incoming Data Packet (17-byte header)
         if msg_type == 0:
-            if len(data) < 17:
+            if len(data) < DATA_HEADER.size:
                 return
 
-            # Unpack 64-bit seq
-            seq, orig_src_port, orig_dst_port, target_ip_bytes = struct.unpack(
-                "!QHH4s", data[1:17]
+            # Unpack the data header (leading type byte re-read into _)
+            _, seq, orig_src_port, orig_dst_port, target_ip_bytes = DATA_HEADER.unpack(
+                data[:DATA_HEADER.size]
             )
             exact_local_ip = socket.inet_ntoa(target_ip_bytes)
             print(
                 f"[<-] Received tunnel packet from {remote_ip}. Spoofing delivery to {exact_local_ip}:{orig_dst_port}..."
             )
 
-            payload = data[17:]
+            payload = data[DATA_HEADER.size:]
 
             # Send ACK
-            ack_packet = struct.pack("!BQ", 1, seq)
+            ack_packet = ACK_HEADER.pack(1, seq)
             self.proxy.tunnel_transport.sendto(ack_packet, (remote_ip, TUNNEL_PORT))
 
             # --- STRICT IN-ORDER DELIVERY LOGIC ---
@@ -102,10 +110,10 @@ class TunnelProtocol(asyncio.DatagramProtocol):
 
         # Incoming ACK Packet (9-byte header: Type(1) + Seq(8))
         elif msg_type == 1:
-            if len(data) < 9:
+            if len(data) < ACK_HEADER.size:
                 return
 
-            seq = struct.unpack("!Q", data[1:9])[0]
+            seq = ACK_HEADER.unpack(data[:ACK_HEADER.size])[1]
 
             if seq in peer.unacked:
                 del peer.unacked[seq]
@@ -119,7 +127,6 @@ class MeshProxy:
         self.local_sock = None
         self.snapshot_ctrl = SnapshotController(self)
 
-        # Removed: routing_table, probe_buffer, last_probe_time
         self.mesh_network = ipaddress.ip_network(MESH_SUBNET, strict=False)
 
     def get_peer(self, ip):
@@ -162,6 +169,13 @@ class MeshProxy:
         if not consumed:
             spoof_sock = self.get_spoof_sock(ip, src_port)
             spoof_sock.sendto(p, (target_local_ip, dst_port))
+
+    def send_data(self, peer_ip, peer_state, src_port, dst_port, target_ip_bytes, payload):
+        """Frame a Type-0 data packet, send it on the tunnel, and track it for retransmit."""
+        packet = DATA_HEADER.pack(0, peer_state.send_seq, src_port, dst_port, target_ip_bytes) + payload
+        self.tunnel_transport.sendto(packet, (peer_ip, TUNNEL_PORT))
+        peer_state.unacked[peer_state.send_seq] = (time.time(), packet)
+        peer_state.send_seq += 1
 
     async def start(self):
         loop = asyncio.get_running_loop()
@@ -214,19 +228,9 @@ class MeshProxy:
                         # ASSUME PROXY EXISTS: Wrap and send via tunnel
                         peer = self.get_peer(target_ip)
                         target_ip_bytes = socket.inet_aton(target_ip)
-                        # Header: Type(1) + Seq(8) + SrcPort(2) + DstPort(2) + TargetIP(4) = 17 bytes
-                        header = struct.pack(
-                            "!BQHH4s",
-                            0,
-                            peer.send_seq,
-                            orig_src_port,
-                            target_port,
-                            target_ip_bytes,
+                        self.send_data(
+                            target_ip, peer, orig_src_port, target_port, target_ip_bytes, data
                         )
-                        packet = header + data
-                        self.tunnel_transport.sendto(packet, (target_ip, TUNNEL_PORT))
-                        peer.unacked[peer.send_seq] = (time.time(), packet)
-                        peer.send_seq += 1
                     else:
                         # OUTSIDE SUBNET: Handle normally (direct spoofed send)
                         spoof_sock = self.get_spoof_sock(orig_src_ip, orig_src_port)
