@@ -5,7 +5,7 @@ import urllib.request
 import json
 import socket
 
-from config import SNAPSHOT_TIMEOUT
+from config import SNAPSHOT_TIMEOUT, MESH_MEMBERS, MESH_SELF, SO_MARK, PROXY_MARK
 
 
 BREAKOUT_URL = os.environ.get("BREAKOUT_URL", "http://10.99.0.1:8989")
@@ -36,6 +36,37 @@ class SnapshotController:
         self.recorded_send_seq = {}
         self.recorded_recv_seq = {}
         self.snapshot_deadline = None
+        # Cached result of _self_mesh_ip() (None = not yet resolved). Static
+        # membership minus this IP is the snapshot peer set, so it must be stable.
+        self._self_ip_cache = None
+
+    def _self_mesh_ip(self):
+        """This node's own mesh IP, used to exclude self from the static cut.
+
+        Returns MESH_SELF if set, else auto-detects by opening a UDP socket and
+        connect()-ing to a member (no packet is sent; connect just resolves which
+        source IP the kernel would route from). SO_MARK PROXY_MARK keeps the
+        socket out of the TPROXY redirect. Result is cached; on any failure
+        returns None and logs a warning.
+        """
+        if MESH_SELF:
+            return MESH_SELF
+        if self._self_ip_cache is not None:
+            return self._self_ip_cache
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, SO_MARK, PROXY_MARK)
+            try:
+                sock.connect((MESH_MEMBERS[0], 9))
+                ip = sock.getsockname()[0]
+            finally:
+                sock.close()
+            self._self_ip_cache = ip
+            return ip
+        except Exception as e:
+            print(f"[!] Could not auto-detect self mesh IP "
+                  f"({type(e).__name__}: {e}); cut may include self")
+            return None
 
     def process_message(self, remote_ip, seq, payload, src_port, dst_port, target_local_ip):
         """
@@ -58,7 +89,12 @@ class SnapshotController:
                 self.channel_states.clear()
                 self.recorded_send_seq = {}
                 self.recorded_recv_seq = {}
-                self.recording_channels = set(self.proxy.peers.keys())
+                # Derive the cut from STATIC membership, not lazily-discovered
+                # self.proxy.peers: every member is marked/recorded even if never
+                # warmed, and non-members (e.g. control 10.24.24.200) are excluded.
+                self_ip = self._self_mesh_ip()
+                members = [ip for ip in MESH_MEMBERS if ip != self_ip]
+                self.recording_channels = set(members)
                 self.recording_channels.discard(remote_ip)
 
                 # Flush any app-emitted datagrams still pending on the intercept
@@ -70,10 +106,13 @@ class SnapshotController:
                 # Trigger the app's CRIU checkpoint
                 self._trigger_app_snapshot_out_of_band(marker_id.decode())
 
-                for peer_ip, peer_state in self.proxy.peers.items():
+                for peer_ip in members:
                     # Chandy-Lamport: emit the marker on EVERY outgoing channel,
                     # including back toward the origin. Excluding the origin would
                     # leave the initiator waiting on markers that never return.
+                    # get_peer() (not .peers[]) so an unwarmed member is created
+                    # here and still gets a marker + send-seq capture.
+                    peer_state = self.proxy.get_peer(peer_ip)
                     print(f"[*] Broadcasting MARKER to {peer_ip}")
                     # Markers ride the same Type-0 data frame so receivers parse them.
                     self.proxy.send_data(
@@ -89,8 +128,9 @@ class SnapshotController:
 
                 # The channel the first marker arrived on has empty recorded state
                 # (the marker flushed it). Record it explicitly, with its recv-side
-                # cut coordinate = this marker's seq + 1.
-                if remote_ip in self.proxy.peers:
+                # cut coordinate = this marker's seq + 1. Gate on static membership
+                # so a marker from a non-member origin is not recorded as a channel.
+                if remote_ip in members:
                     self.channel_states[remote_ip] = []
                     self.recorded_recv_seq[remote_ip] = seq + 1
 
@@ -147,7 +187,15 @@ class SnapshotController:
         future marker as stale). A swallowed failure means NO app checkpoint
         was taken for this snapshot -- hence the loud marker.
         """
-        container_id = CHECKPOINT_TARGET or socket.gethostname()
+        container_id = CHECKPOINT_TARGET
+        if not container_id:
+            # gethostname() is the sidecar's own id (shared netns, separate UTS),
+            # not the app container we mean to CRIU-checkpoint, so the export
+            # filename would silently target the WRONG container. Make it loud.
+            container_id = socket.gethostname()
+            print(f"[!] CHECKPOINT_TARGET unset; checkpoint target falls back to "
+                  f"sidecar hostname '{container_id}' -- this is almost certainly "
+                  f"the WRONG container (set CHECKPOINT_TARGET to the app id)")
 
         # Catch everything, including ValueError from a malformed BREAKOUT_URL
         # at Request() construction and http.client.HTTPException from urlopen.
@@ -264,12 +312,19 @@ class SnapshotController:
         # Assemble the channel-state half of the global snapshot BEFORE the flush
         # clears it. This artifact (per-peer send_seq/recv_seq + recorded in-flight
         # messages) is what a restored sidecar loads instead of being CRIU'd.
-        artifact = self._build_artifact()
+        artifact = self._build_artifact("complete")
         # POST the recorded cut to the breakout receiver for durable storage
         # keyed by snapshot_id; build it BEFORE the flush clears the state.
-        self._post_artifact(artifact)
-        print(f"[*] Global Snapshot Complete! Recorded cut for snapshot "
-              f"{artifact['snapshot_id']} ({len(artifact['peers'])} peers).")
+        ok = self._post_artifact(artifact)
+        if ok:
+            print(f"[*] Global Snapshot Complete! Recorded cut for snapshot "
+                  f"{artifact['snapshot_id']} ({len(artifact['peers'])} peers).")
+        else:
+            # Never claim completion when the POST failed: the cut exists only in
+            # this (about-to-be-flushed) process, so the artifact is effectively
+            # lost. Make the missing artifact LOUD instead of silent.
+            print(f"[!] Snapshot {artifact['snapshot_id']} recorded but PERSIST "
+                  f"FAILED; cut NOT stored ({len(artifact['peers'])} peers lost).")
         self._flush_and_reset()
 
     def _post_artifact(self, artifact):
@@ -280,6 +335,8 @@ class SnapshotController:
         Any failure here is logged but swallowed (same discipline as
         _trigger_app_snapshot_out_of_band) so a flaky POST cannot wedge the
         controller; a swallowed failure means this node's cut was not persisted.
+        Returns True on a successful POST, False on failure, so callers can avoid
+        printing a success/Complete message when the cut was not actually stored.
         """
         # Catch everything, including ValueError from a malformed BREAKOUT_URL
         # at Request() construction and http.client.HTTPException from urlopen.
@@ -293,17 +350,20 @@ class SnapshotController:
             with urllib.request.urlopen(request, timeout=CHECKPOINT_REQUEST_TIMEOUT_S):
                 pass
             print(f"[*] Persisted cut for snapshot {artifact['snapshot_id']}")
+            return True
         except Exception as e:
             print(f"[!] PERSIST FAILED for snapshot {artifact['snapshot_id']} "
                   f"({type(e).__name__}: {e}); cut was not stored")
+            return False
 
-    def _build_artifact(self):
+    def _build_artifact(self, status="complete"):
         """Serialize this node's recorded Chandy-Lamport cut.
 
-        Shape: {snapshot_id, node, peers: {peer_ip: {send_seq, recv_seq,
+        Shape: {snapshot_id, node, status, peers: {peer_ip: {send_seq, recv_seq,
         channel: [{seq, payload_b64, src_port, dst_port, target_local_ip}, ...]}}}.
-        Payloads are bytes, so they are base64-encoded for JSON. Only send_seq,
-        recv_seq, and the recorded channel messages are kept; unacked and
+        status is "complete" (all markers returned) or "aborted" (cut not
+        consistent). Payloads are bytes, so they are base64-encoded for JSON. Only
+        send_seq, recv_seq, and the recorded channel messages are kept; unacked and
         recv_buffer are deliberately omitted (FIFO RUDP + whole-system restore
         make them recoverable/irrelevant at the cut).
         """
@@ -312,11 +372,21 @@ class SnapshotController:
             | set(self.recorded_recv_seq)
             | set(self.channel_states)
         )
+        node = CHECKPOINT_TARGET
+        if not node:
+            # CHECKPOINT_TARGET must be the *app* container id; gethostname()
+            # returns the sidecar's own id (shared netns, separate UTS), so the
+            # artifact would be filed under the WRONG node and silently look fine.
+            node = socket.gethostname()
+            print(f"[!] CHECKPOINT_TARGET unset; artifact node id falls back to "
+                  f"sidecar hostname '{node}' -- this is almost certainly the "
+                  f"WRONG node id (set CHECKPOINT_TARGET to the app container id)")
         return {
             "snapshot_id": (
                 self.current_snapshot_id.decode() if self.current_snapshot_id else None
             ),
-            "node": CHECKPOINT_TARGET or socket.gethostname(),
+            "node": node,
+            "status": status,
             "peers": {
                 peer: {
                     "send_seq": self.recorded_send_seq.get(peer),
@@ -341,6 +411,16 @@ class SnapshotController:
         # black-hole the mesh; just don't claim a consistent cut was taken.
         print(f"[!] Snapshot {self.current_snapshot_id} aborted ({reason}); "
               f"delivering buffered traffic and resetting.")
+        # Emit an "aborted" artifact BEFORE _flush_and_reset clears the state, so
+        # a node that received a marker ALWAYS produces a json (complete OR
+        # aborted) -- a missing artifact is never silent. Build before the flush.
+        artifact = self._build_artifact("aborted")
+        if self._post_artifact(artifact):
+            print(f"[!] Snapshot {artifact['snapshot_id']} aborted artifact "
+                  f"persisted ({reason}); cut is NOT consistent.")
+        else:
+            print(f"[!] Snapshot {artifact['snapshot_id']} aborted AND aborted "
+                  f"artifact PERSIST FAILED ({reason}); nothing stored.")
         self._flush_and_reset()
 
     def _flush_and_reset(self):

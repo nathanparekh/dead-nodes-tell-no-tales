@@ -63,9 +63,6 @@ class TunnelProtocol(asyncio.DatagramProtocol):
                 data[:DATA_HEADER.size]
             )
             exact_local_ip = socket.inet_ntoa(target_ip_bytes)
-            print(
-                f"[<-] Received tunnel packet from {remote_ip}. Spoofing delivery to {exact_local_ip}:{orig_dst_port}..."
-            )
 
             payload = data[DATA_HEADER.size:]
 
@@ -75,6 +72,9 @@ class TunnelProtocol(asyncio.DatagramProtocol):
 
             # --- STRICT IN-ORDER DELIVERY LOGIC ---
             if seq == peer.recv_seq:
+                print(
+                    f"[<-] seq {seq} from {remote_ip} (recv_seq {peer.recv_seq}) IN-ORDER. Spoofing delivery to {exact_local_ip}:{orig_dst_port}..."
+                )
                 self.proxy.process_and_deliver(
                     seq,
                     payload,
@@ -101,11 +101,19 @@ class TunnelProtocol(asyncio.DatagramProtocol):
                     peer.recv_seq += 1
 
             elif seq > peer.recv_seq:
+                print(
+                    f"[<-] seq {seq} from {remote_ip} (recv_seq {peer.recv_seq}) FUTURE. Buffering..."
+                )
                 peer.recv_buffer[seq] = (
                     payload,
                     orig_src_port,
                     orig_dst_port,
                     exact_local_ip,
+                )
+
+            else:
+                print(
+                    f"[<-] seq {seq} from {remote_ip} (recv_seq {peer.recv_seq}) DUPLICATE/STALE. Dropping (ACKed)..."
                 )
 
         # Incoming ACK Packet (9-byte header: Type(1) + Seq(8))
@@ -114,6 +122,7 @@ class TunnelProtocol(asyncio.DatagramProtocol):
                 return
 
             seq = ACK_HEADER.unpack(data[:ACK_HEADER.size])[1]
+            print(f"[ack] seq {seq} from {remote_ip}")
 
             if seq in peer.unacked:
                 del peer.unacked[seq]
@@ -173,6 +182,7 @@ class MeshProxy:
     def send_data(self, peer_ip, peer_state, src_port, dst_port, target_ip_bytes, payload):
         """Frame a Type-0 data packet, send it on the tunnel, and track it for retransmit."""
         packet = DATA_HEADER.pack(0, peer_state.send_seq, src_port, dst_port, target_ip_bytes) + payload
+        print(f"[->] seq {peer_state.send_seq} to {peer_ip} ({len(payload)}b)")
         self.tunnel_transport.sendto(packet, (peer_ip, TUNNEL_PORT))
         peer_state.unacked[peer_state.send_seq] = (time.time(), packet)
         peer_state.send_seq += 1
@@ -275,6 +285,7 @@ class MeshProxy:
                 for seq, (timestamp, packet) in list(peer.unacked.items()):
                     if now - timestamp > RETRY_TIMEOUT:
                         if self.tunnel_transport:
+                            print(f"[retx] seq {seq} to {ip}")
                             self.tunnel_transport.sendto(packet, (ip, TUNNEL_PORT))
                             peer.unacked[seq] = (now, packet)
             await asyncio.sleep(0.1)
