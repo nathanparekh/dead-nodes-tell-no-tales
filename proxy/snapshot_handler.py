@@ -1,5 +1,6 @@
 import time
 import os
+import base64
 import urllib.request
 import json
 import socket
@@ -24,6 +25,11 @@ class SnapshotController:
         self.current_snapshot_id = None
         self.recording_channels = set()
         self.channel_states = {}
+        # Per-peer cut coordinates, captured at each channel's marker. Together
+        # with channel_states these ARE the Chandy-Lamport channel-state half of
+        # the snapshot (the sidecar is the recorder; it is never CRIU-checkpointed).
+        self.recorded_send_seq = {}
+        self.recorded_recv_seq = {}
         self.snapshot_deadline = None
 
     def process_message(self, remote_ip, seq, payload, src_port, dst_port, target_local_ip):
@@ -46,19 +52,34 @@ class SnapshotController:
                 self._trigger_app_snapshot_out_of_band(marker_id.decode())
 
                 self.channel_states.clear()
+                self.recorded_send_seq = {}
+                self.recorded_recv_seq = {}
                 self.recording_channels = set(self.proxy.peers.keys())
                 self.recording_channels.discard(remote_ip)
 
                 for peer_ip, peer_state in self.proxy.peers.items():
-                    if peer_ip != remote_ip:
-                        print(f"[*] Broadcasting MARKER to {peer_ip}")
-                        # Markers ride the same Type-0 data frame so receivers parse them.
-                        self.proxy.send_data(
-                            peer_ip, peer_state, 0, 0, b"\x00\x00\x00\x00", payload
-                        )
+                    # Chandy-Lamport: emit the marker on EVERY outgoing channel,
+                    # including back toward the origin. Excluding the origin would
+                    # leave the initiator waiting on markers that never return.
+                    print(f"[*] Broadcasting MARKER to {peer_ip}")
+                    # Markers ride the same Type-0 data frame so receivers parse them.
+                    self.proxy.send_data(
+                        peer_ip, peer_state, 0, 0, b"\x00\x00\x00\x00", payload
+                    )
+                    # send_data just advanced send_seq to (marker_seq + 1): this
+                    # channel's send-side cut coordinate. The restored node resumes
+                    # sending from here so the peer's recv_seq lines up exactly.
+                    self.recorded_send_seq[peer_ip] = peer_state.send_seq
 
                 for ip in self.recording_channels:
                     self.channel_states[ip] = []
+
+                # The channel the first marker arrived on has empty recorded state
+                # (the marker flushed it). Record it explicitly, with its recv-side
+                # cut coordinate = this marker's seq + 1.
+                if remote_ip in self.proxy.peers:
+                    self.channel_states[remote_ip] = []
+                    self.recorded_recv_seq[remote_ip] = seq + 1
 
                 # Now waiting for each peer's marker; bound that wait so a peer
                 # that dies mid-snapshot can't pin is_snapshotting=True forever.
@@ -79,6 +100,9 @@ class SnapshotController:
                     print(
                         f"[*] Marker received from {remote_ip}. Finalizing this channel's state."
                     )
+                    # This channel's recv-side cut coordinate: everything up to and
+                    # including this marker has been received; resume at seq + 1.
+                    self.recorded_recv_seq[remote_ip] = seq + 1
                     self.recording_channels.discard(remote_ip)
 
                     if not self.recording_channels:
@@ -141,8 +165,54 @@ class SnapshotController:
             self._abort_snapshot("timed out waiting for markers")
 
     def _finish_global_snapshot(self):
-        print("[*] Global Snapshot Complete! Flushing all cached channels...")
+        # Assemble the channel-state half of the global snapshot BEFORE the flush
+        # clears it. This artifact (per-peer send_seq/recv_seq + recorded in-flight
+        # messages) is what a restored sidecar loads instead of being CRIU'd.
+        artifact = self._build_artifact()
+        # TODO(next step): POST `artifact` to the breakout receiver for durable
+        # storage keyed by snapshot_id. For now log it so the recorded cut is
+        # visible and the capture path is exercised end to end.
+        print("[*] Global Snapshot Complete! Recorded cut: " + json.dumps(artifact))
         self._flush_and_reset()
+
+    def _build_artifact(self):
+        """Serialize this node's recorded Chandy-Lamport cut.
+
+        Shape: {snapshot_id, node, peers: {peer_ip: {send_seq, recv_seq,
+        channel: [{seq, payload_b64, src_port, dst_port, target_local_ip}, ...]}}}.
+        Payloads are bytes, so they are base64-encoded for JSON. Only send_seq,
+        recv_seq, and the recorded channel messages are kept; unacked and
+        recv_buffer are deliberately omitted (FIFO RUDP + whole-system restore
+        make them recoverable/irrelevant at the cut).
+        """
+        peers = (
+            set(self.recorded_send_seq)
+            | set(self.recorded_recv_seq)
+            | set(self.channel_states)
+        )
+        return {
+            "snapshot_id": (
+                self.current_snapshot_id.decode() if self.current_snapshot_id else None
+            ),
+            "node": CHECKPOINT_TARGET or socket.gethostname(),
+            "peers": {
+                peer: {
+                    "send_seq": self.recorded_send_seq.get(peer),
+                    "recv_seq": self.recorded_recv_seq.get(peer),
+                    "channel": [
+                        {
+                            "seq": m["seq"],
+                            "payload_b64": base64.b64encode(m["payload"]).decode("ascii"),
+                            "src_port": m["src_port"],
+                            "dst_port": m["dst_port"],
+                            "target_local_ip": m["target_local_ip"],
+                        }
+                        for m in self.channel_states.get(peer, [])
+                    ],
+                }
+                for peer in sorted(peers)
+            },
+        }
 
     def _abort_snapshot(self, reason):
         # Deliver the buffered traffic anyway so an incomplete snapshot doesn't
@@ -156,6 +226,8 @@ class SnapshotController:
         self.current_snapshot_id = None
         self.snapshot_deadline = None
         self.recording_channels = set()
+        self.recorded_send_seq = {}
+        self.recorded_recv_seq = {}
 
         # Recorded messages were already received and ACKed by the RUDP layer
         # (recv_seq advanced at receipt); recording only deferred their delivery
