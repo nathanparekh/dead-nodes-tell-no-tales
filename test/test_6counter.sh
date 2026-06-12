@@ -1,8 +1,9 @@
 #!/bin/bash
 # test_6counter.sh [snapshot_id]  — 6-container Counter snapshot-under-load test.
 #
-# Topology: 6 counters (a..f, IPs .10..15), 2 per physical node, deployed first
-# with ./test/deploy6.sh on each node. This driver runs from ONE node (the
+# Topology: 6 counters (a..f, IPs .10..15), 3 per physical node across 2 nodes
+# (a,b,c on A; d,e,f on B), deployed first with ./test/deploy6.sh on each node.
+# This driver runs from ONE node (the
 # snapshot initiator, node A) and drives everything through the control
 # container (mesh-ctl @ 10.24.24.200) brought up by mesh_ctl.sh — NO SSH.
 #

@@ -1,7 +1,7 @@
-# RUNBOOK: 6-container Counter snapshot-under-load test (3 EC2 nodes)
+# RUNBOOK: 6-container Counter snapshot-under-load test (2 EC2 nodes)
 
 A global Chandy-Lamport snapshot taken while the mesh is under continuous load,
-with **6 counters — 2 on each of the 3 physical nodes**. The control container
+with **6 counters — 3 on each of the 2 physical nodes**. The control container
 sends transfers continuously, both before and after the cut; the test passes if
 the conserved total is unchanged afterwards.
 
@@ -12,13 +12,12 @@ networks, and breakout receiver — only the topology and the driver differ.
 ## Topology
 
 `build.sh` derives the mesh IP from the suffix char (`a`→`.10`). We use six
-suffixes `a`–`f`, paired 2-per-node:
+suffixes `a`–`f`, 3-per-node across 2 nodes:
 
-| Physical node | counters                | mesh IPs              |
-|---------------|-------------------------|-----------------------|
-| A             | `counter-a`, `counter-d` | `10.24.24.10`, `10.24.24.13` |
-| B             | `counter-b`, `counter-e` | `10.24.24.11`, `10.24.24.14` |
-| C             | `counter-c`, `counter-f` | `10.24.24.12`, `10.24.24.15` |
+| Physical node | counters                              | mesh IPs                                |
+|---------------|---------------------------------------|-----------------------------------------|
+| A             | `counter-a`, `counter-b`, `counter-c` | `10.24.24.10`, `10.24.24.11`, `10.24.24.12` |
+| B             | `counter-d`, `counter-e`, `counter-f` | `10.24.24.13`, `10.24.24.14`, `10.24.24.15` |
 
 The control container (`mesh-ctl`, started by `mesh_ctl.sh`) uses `10.24.24.200`
 and is deliberately **not** a mesh member, so it is never recorded in the cut.
@@ -28,10 +27,11 @@ local `/tmp`.
 
 ## Prerequisites
 
-Same as `RUNBOOK.md`: the VXLAN overlay `10.24.24.0/24` is routable across all
-three nodes (UDP `9001` open node-to-node), the `vlan` macvlan network exists on
-each node, and `podman` + `CRIU` + `sudo` are available. The repo is cloned on
-each node; run scripts from the repo root.
+Same as `RUNBOOK.md`: the VXLAN overlay `10.24.24.0/24` is routable across the
+nodes (UDP `9001` open node-to-node), the `vlan` macvlan network exists on each
+node, and `podman` + `CRIU` + `sudo` are available. The repo is cloned on each
+node; run scripts from the repo root. (This test uses 2 of the cluster's nodes;
+a third node, if present, is simply unused here.)
 
 > **Why all six members must be known everywhere.** The snapshot marker fan-out
 > and the recording set are derived from `MESH_MEMBERS` (see `config.py` /
@@ -43,27 +43,25 @@ each node; run scripts from the repo root.
 
 ## 1. Deploy — run ON EACH node with that node's letter
 
-Each node deploys only its own pair (no SSH). Run all three at once for speed:
+Each node deploys only its own three (no SSH). Run both at once for speed:
 
 ```bash
 # on node A:
-./test/deploy6.sh A      # brings up counter-a + counter-d (+ sidecars)
+./test/deploy6.sh A      # brings up counter-a + counter-b + counter-c (+ sidecars)
 
 # on node B:
-./test/deploy6.sh B      # counter-b + counter-e
-
-# on node C:
-./test/deploy6.sh C      # counter-c + counter-f
+./test/deploy6.sh B      # counter-d + counter-e + counter-f
 ```
 
-`deploy6.sh` exports `MESH_MEMBERS` (all six IPs) and calls `build.sh` twice, so
-each node ends up running its two `counter-<suffix>` + `sidecar-<suffix>` pairs,
-its breakout-anchor, and its local breakout receiver on `10.99.0.1:8989`.
+`deploy6.sh` exports `MESH_MEMBERS` (all six IPs) and calls `build.sh` three
+times, so each node ends up running its three `counter-<suffix>` +
+`sidecar-<suffix>` pairs, its breakout-anchor, and its local breakout receiver
+on `10.99.0.1:8989`.
 
 Confirm (on each node):
 
 ```bash
-sudo podman ps --format '{{.Names}}' | sort      # expect this node's two counter-* + sidecar-*
+sudo podman ps --format '{{.Names}}' | sort      # expect this node's three counter-* + sidecar-*
 ```
 
 ## 2. Run the test — from ONE node (node A, the initiator)
@@ -103,10 +101,10 @@ Each node wrote only its own pieces to its own local `/tmp`:
 ```bash
 # on each node:
 curl -s http://10.99.0.1:8989/snapshot/<snap_id>
-ls -l /tmp/snapshot-<snap_id>-counter-*        # this node's two .json + .tar.zst
+ls -l /tmp/snapshot-<snap_id>-counter-*        # this node's three .json + .tar.zst
 ```
 
-You should see, across the three nodes, all six artifacts:
+You should see, across the two nodes, all six artifacts:
 `counter-a/b/c/d/e/f`, each with a `.json` (channel-state cut) and a `.tar.zst`
 (app CRIU image).
 
@@ -117,11 +115,9 @@ node's own counters with their letters:
 
 ```bash
 # on node A:
-./run_restore.sh <snap_id> a d
+./run_restore.sh <snap_id> a b c
 # on node B:
-./run_restore.sh <snap_id> b e
-# on node C:
-./run_restore.sh <snap_id> c f
+./run_restore.sh <snap_id> d e f
 ```
 
 Then re-verify conservation by re-running step 2's checks (or just
