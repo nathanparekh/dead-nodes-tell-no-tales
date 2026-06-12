@@ -12,21 +12,14 @@ BREAKOUT_URL = os.environ.get("BREAKOUT_URL", "http://10.99.0.1:8989")
 # Client-side timeout for the checkpoint POST. Must be >= the receiver's
 # COMMAND_TIMEOUT_S (breakout_receiver.py) so we don't give up before it replies.
 CHECKPOINT_REQUEST_TIMEOUT_S = 120
-# The container to CRIU-checkpoint, used as this node's identity in the
-# whole-system artifact (_build_artifact / restore_from_artifact -- main's
-# counter-app restore path). Must be the *app* container id: the sidecar shares
-# the app's network namespace but not its UTS, so gethostname() returns the
-# sidecar's own id, the wrong target. The workqueue app does NOT need this set:
-# its checkpoint is the pair checkpoint (_trigger_app_snapshot_out_of_band
-# below), which resolves the (app, sidecar) pair from the caller's own container
-# name on the host, so the sidecar only POSTs its own hostname.
+# The container to CRIU-checkpoint. Must be set to the *app* container id: the
+# sidecar shares the app's network namespace but not its UTS, so gethostname()
+# returns the sidecar's own id, which is the wrong target.
 CHECKPOINT_TARGET = os.environ.get("CHECKPOINT_TARGET")
 # When set, this sidecar is a fresh restore-mode recorder: on startup it loads
 # this snapshot's artifact for THIS node (identity = CHECKPOINT_TARGET), seeds
 # per-peer send_seq/recv_seq, and replays the recorded channel into the local
 # app before serving live traffic. Unset/empty -> normal live sidecar (no-op).
-# The workqueue harness restores from the pair CRIU tars directly and never sets
-# this, so restore_from_artifact() is a no-op for the workqueue app.
 RESTORE_SNAPSHOT_ID = os.environ.get("RESTORE_SNAPSHOT_ID")
 
 class SnapshotController:
@@ -187,39 +180,38 @@ class SnapshotController:
 
     def _trigger_app_snapshot_out_of_band(self, snapshot_id):
         """
-        Ask the host's breakout receiver to CRIU-checkpoint the app+sidecar PAIR.
-
-        We POST our own sidecar hostname as caller_id; the receiver's
-        /checkpoint-pair resolves the (app, sidecar) pair from it and
-        checkpoints the app FIRST, then this sidecar -- while this very HTTP
-        request blocks, so the pair cut is mutually consistent (the work-queue
-        snapshot correctness requirement). Exports land under
-        /tmp/snapshots/<snapshot_id>/.
+        Ask the host's breakout receiver to CRIU-checkpoint this container.
 
         Any failure here is logged but swallowed so it cannot brick the
         controller (an escape would leave is_snapshotting=True and drop every
         future marker as stale). A swallowed failure means NO app checkpoint
         was taken for this snapshot -- hence the loud marker.
         """
-        # The pair checkpoint resolves the (app, sidecar) pair on the host from
-        # the caller's own container name, so we POST only our own hostname.
-        caller_id = socket.gethostname()
+        container_id = CHECKPOINT_TARGET
+        if not container_id:
+            # gethostname() is the sidecar's own id (shared netns, separate UTS),
+            # not the app container we mean to CRIU-checkpoint, so the export
+            # filename would silently target the WRONG container. Make it loud.
+            container_id = socket.gethostname()
+            print(f"[!] CHECKPOINT_TARGET unset; checkpoint target falls back to "
+                  f"sidecar hostname '{container_id}' -- this is almost certainly "
+                  f"the WRONG container (set CHECKPOINT_TARGET to the app id)")
 
         # Catch everything, including ValueError from a malformed BREAKOUT_URL
         # at Request() construction and http.client.HTTPException from urlopen.
         try:
             payload = json.dumps({
-                "caller_id": caller_id,
-                "snapshot_id": snapshot_id,
+                "target_id": container_id,
+                "export_path": f"/tmp/snapshot-{snapshot_id}-{container_id}.tar.zst",
             }).encode("utf-8")
             request = urllib.request.Request(
-                f"{BREAKOUT_URL}/checkpoint-pair",
+                f"{BREAKOUT_URL}/checkpoint",
                 data=payload,
                 headers={"Content-Type": "application/json"},
             )
             with urllib.request.urlopen(request, timeout=CHECKPOINT_REQUEST_TIMEOUT_S):
                 pass
-            print(f"[*] Host checkpointed pair for {caller_id} (snapshot {snapshot_id})")
+            print(f"[*] Host checkpointed {container_id} (snapshot {snapshot_id})")
         except Exception as e:
             print(f"[!] CHECKPOINT FAILED for snapshot {snapshot_id} "
                   f"({type(e).__name__}: {e}); no app state was saved")

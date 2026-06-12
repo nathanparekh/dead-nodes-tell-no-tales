@@ -109,10 +109,12 @@ retransmits and replay-on-restore.
 ## 8. Snapshot integration (no proxy changes)
 
 Identical to token ring — rides `__START_SNAPSHOT__` → `_handle_local_intercept` → marker broadcast
-+ out-of-band CRIU (`POST /checkpoint-pair` on the host-side breakout receiver,
-`http://10.99.0.1:8989`) → per-channel recording into `channel_states` → replay on
-`_finish_global_snapshot`. The in-flight `JOB` is cached and, on replay, spoof-delivered into the
-restored worker, which processes it through the §6 handler.
++ out-of-band CRIU (the sidecar `POST /checkpoint`s its app to the host-side breakout receiver,
+`http://10.99.0.1:8989`) → per-channel recording into `channel_states` → the recorded cut is
+persisted via `POST /snapshot_state` as a per-node JSON artifact. On restore, a fresh restore-mode
+sidecar (`RESTORE_SNAPSHOT_ID` set) reads `GET /snapshot/<id>`, seeds per-peer seqs, and replays the
+recorded channel. The in-flight `JOB` is captured in that artifact and, on replay, spoof-delivered
+into the restored worker, which processes it through the §6 handler. Sidecars are never CRIU'd.
 
 ## 9. The demonstration
 
@@ -126,8 +128,8 @@ job is provably absent from both CRIU images and present only in `channel_states
 
 | restore | procedure | result |
 |---|---|---|
-| **(a) proxy-consistent** | restore all from CRIU **and** replay recorded channel | the `JOB` reaches the worker, completes → appears in `completed`; `verify` → **PASS** |
-| **(b) CRIU-only (control)** | restore all from CRIU, **discard** the recorded channel | the job is gone from every node; no party knows it existed → it is **never completed**; `verify` → **FAIL** (completeness) |
+| **(a) artifact-consistent** | restore apps from CRIU; restore-mode sidecars replay the recorded channel artifact | the `JOB` reaches the worker, completes → appears in `completed`; `verify` → **PASS** |
+| **(b) CRIU-only (control)** | restore apps from CRIU; **fresh** sidecars **discard** the recorded channel | the job is gone from every node; no party knows it existed → it is **never completed**; `verify` → **FAIL** (completeness) |
 
 The control is the same checkpoint data minus the channel-replay step — i.e. what a naive CRIU-only
 checkpoint yields. The coordinator **cannot** rescue it: with no dispatch log, `lost = universe −
@@ -182,8 +184,8 @@ is *weaker* than token ring's, and intellectual honesty requires saying why:
 
 1. Host CRIU **restore** path — built, or only checkpoint? (Shared prerequisite with any
    checkpoint-based app.) **Resolved:** the host-side breakout receiver
-   (`proxy/breakout_receiver.py`, `POST /checkpoint-pair` and `/restore`) +
-   `test/test_workqueue_snapshot.sh` now provide both — see §14.
+   (`proxy/breakout_receiver.py`, `POST /checkpoint`, `POST /snapshot_state`, `GET /snapshot/<id>`,
+   `/restore`, `/run_sidecar`) + `test/test_workqueue_snapshot.sh` now provide both — see §14.
 2. Should clients retain submitted-but-unconfirmed jobs and re-submit on timeout? That re-introduces
    recovery (at the client) — keep clients fire-and-forget to preserve the property, and note it.
 3. Keep `counter` and/or token ring alongside for contrast, or replace?
@@ -192,7 +194,8 @@ is *weaker* than token ring's, and intellectual honesty requires saying why:
 
 Three pieces implement §9/§11: `build_workqueue.sh` (per-node deploy, mirrors `build.sh`),
 `proxy/breakout_receiver.py` (the host-side CRIU agent behind the breakout bridge gateway
-`10.99.0.1:8989`, §8 — its `POST /checkpoint-pair` checkpoints the app+sidecar pair), and
+`10.99.0.1:8989`, §8 — its `POST /checkpoint` CRIU-checkpoints a single app container and
+`POST /snapshot_state` persists that node's channel-state cut as a JSON artifact), and
 `test/test_workqueue_snapshot.sh` (the M6 driver, which starts the receiver itself).
 
 **Per-host prerequisites**
@@ -203,28 +206,25 @@ Three pieces implement §9/§11: `build_workqueue.sh` (per-node deploy, mirrors 
   deploy/harness create it on demand. The macvlan apps cannot route to the host directly, so
   the sidecars reach the receiver over this bridge.
 - The receiver is running as root: `sudo python3 proxy/breakout_receiver.py` — it serves
-  `POST /checkpoint-pair` (and `/checkpoint`, `/restore`, `/stop`, `/health`) on the breakout
-  gateway `10.99.0.1:8989`; sanity-check with `curl http://10.99.0.1:8989/health` → `{"ok": true}`.
-- The proxy on this branch must carry the snapshot-path port (markers framed with the 17-byte
-  `!BQHH4s` tunnel header, 6-arg replay; branch `bug-hunt-claude-screen`, commit `aa6fc62`)
-  **and** a fix for the still-open S7 replay bug (recorded in-flight messages dropped because
-  `recv_seq` already advanced — `claude_screen/findings/11-snapshot-divergence.md`). The driver's
-  preflight refuses to run without the port and prints how an unfixed S7 manifests.
+  `POST /checkpoint`, `POST /snapshot_state`, `GET /snapshot/<id>`, `/restore`, `/run_sidecar`,
+  `/stop` and `/health` on the breakout gateway `10.99.0.1:8989`; sanity-check with
+  `curl http://10.99.0.1:8989/health` → `{"ok": true}`.
 
-**Single-host quickstart** (a=coordinator, b/c=workers, d=client, all four pairs on one host):
+**Single-host quickstart** (a=coordinator, b/c=workers, d=client, all four app containers on one host):
 
     sudo ./test/test_workqueue_snapshot.sh --deploy
 
 The driver primes all channels, submits jobs 1–8, applies `tc netem` (env `DELAY_MS`, default
 3000 ms) to the coordinator's egress, submits jobs 9–10 and triggers the snapshot in a single
-exec (catching both `JOB`s on the wire), collects the eight CRIU exports from
-`/tmp/snapshots/<snapshot_id>/`, then runs the verdict legs. **PASS looks like:**
+exec (catching both `JOB`s on the wire), collects each node's CRIU image and channel-state cut
+(`/tmp/snapshot-<snapshot_id>-workqueue-<node>.tar.zst` + `.json`), then runs the verdict legs.
+**PASS looks like:**
 
 | leg | expected |
 |---|---|
 | live continuation (no restore) | `verify 10` → **PASS** (sanity) |
-| restore (a): apps **and** sidecars from the cut | `verify 10` → **PASS** |
-| restore (b): apps from the cut, **fresh** sidecars | `verify 10` → **FAIL missing=9,10** |
+| restore (a): apps from the cut, **restore-mode** sidecars replay the channel artifact | `verify 10` → **PASS** |
+| restore (b): apps from the cut, **fresh** sidecars (no artifact replay) | `verify 10` → **FAIL missing=9,10** |
 
 Exit code 0 iff exactly PASS / PASS / FAIL **with leg (b) failing for exactly `missing=9,10`**
 (any other failure — unreachable workers, non-disjoint sets — is broken plumbing, not the
@@ -235,7 +235,7 @@ Two operational notes: post-trigger verification runs over **loopback** inside e
 container (no node ever markers back toward the snapshot initiator, so the client's sidecar
 records-and-consumes every mesh reply to the client after the trigger — client-mesh
 observation would hang); and the driver reports a **"catch window blown"** diagnosis when the
-client-pair checkpoint took ≥ `DELAY_MS` (raise `DELAY_MS` and re-run). After an aborted run,
+client's app checkpoint took ≥ `DELAY_MS` (raise `DELAY_MS` and re-run). After an aborted run,
 re-run with `--deploy` (surviving workers retain completed jobs).
 
 Multi-host is out of scope: it needs manual `build_workqueue.sh` runs per node plus one agent
