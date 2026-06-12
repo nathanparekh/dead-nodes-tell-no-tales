@@ -49,21 +49,37 @@ breakout_ok() { # usage: breakout_ok <endpoint> <json-body>
     echo
 }
 
-# Ensure THIS node's breakout receiver is up (restore drives the LOCAL receiver).
-# If it is down, start it the same way build.sh does -- detached so it survives
-# this script and the SSH session -- rather than aborting the restore. Run this
-# from the repo root so proxy/breakout_receiver.py resolves.
-if ! curl -fsS --max-time 5 "$BREAKOUT_URL/health" >/dev/null 2>&1; then
-    echo "[*] Breakout receiver down at $BREAKOUT_URL; starting it locally..."
+# Ensure THIS node's breakout receiver is RESPONSIVE (restore drives the LOCAL
+# receiver). It is single-threaded, so a slow/hung podman op (checkpoint/restore)
+# blocks it and /health can time out even though it is alive and holding the port
+# -- naively starting a second one then dies with EADDRINUSE. So: retry a few
+# times (a busy receiver usually frees up); only if it stays unresponsive treat it
+# as wedged -- kill the stale instance (freeing the port) and start fresh.
+# Run from the repo root so proxy/breakout_receiver.py resolves.
+start_receiver() {
     sudo setsid python3 proxy/breakout_receiver.py --host 10.99.0.1 --port 8989 \
         --mesh-subnet 10.24.24.0/24 </dev/null >/tmp/breakout-receiver.log 2>&1 &
+    sleep 2
+}
+for _attempt in 1 2 3 4 5; do
+    if curl -fsS --max-time 5 "$BREAKOUT_URL/health" >/dev/null 2>&1; then
+        break
+    fi
+    if [ "$_attempt" -lt 5 ]; then
+        echo "[*] receiver at $BREAKOUT_URL not responding; waiting (may be busy)..."
+        sleep 3
+        continue
+    fi
+    echo "[*] receiver wedged/down; killing any stale instance and restarting..."
+    sudo pkill -f 'breakout_receiver.py --host' 2>/dev/null || true
     sleep 1
+    start_receiver
     if ! curl -fsS --max-time 5 "$BREAKOUT_URL/health" >/dev/null 2>&1; then
-        echo "ERROR: breakout receiver still unreachable at $BREAKOUT_URL after start;" >&2
-        echo "       run this from the repo root on the node being restored." >&2
+        echo "ERROR: breakout receiver still unreachable at $BREAKOUT_URL after restart;" >&2
+        echo "       check /tmp/breakout-receiver.log; run from the repo root." >&2
         exit 1
     fi
-fi
+done
 
 echo "Restoring snapshot $SNAPSHOT_ID across nodes: ${NODES[*]}"
 
