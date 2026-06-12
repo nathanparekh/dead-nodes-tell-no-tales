@@ -88,6 +88,13 @@ fi
 
 # 2. Launch the core application container onto the macvlan network
 echo "[*] Starting App Container: $APP_NAME on IP $IP"
+# Remove any existing sidecar FIRST: it joins the app's netns, so podman refuses
+# to --replace the app while the sidecar depends on it -- the run then errors and
+# silently leaves the OLD app container (with its stale MAC/state) running instead
+# of redeploying. That is why an earlier "rebuild" didn't actually take effect.
+if [ "$PROXY" = true ]; then
+    sudo podman rm -f "$SIDECAR_NAME" 2>/dev/null || true
+fi
 sudo podman run -d --replace \
   --name "$APP_NAME" \
   "${NETWORK_ARGS[@]}" \
