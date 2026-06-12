@@ -1,3 +1,7 @@
+# HISTORICAL NOTES (not a runnable script) — manual CRIU checkpoint/restore and
+# cross-host migration commands, kept for hand-debugging. The automated path now
+# goes through the host breakout receiver (proxy/breakout_receiver.py).
+#
 # from prince
 # Run the process container you want to migrate
 # if container on podman make sure to run it with sudo

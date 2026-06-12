@@ -17,7 +17,7 @@ def receive_messages(sock):
 def main():
     if len(sys.argv) != 5:
         print(
-            "Usage: python auto_test.py <NODE_NAME> <LOCAL_PORT> <PEER_IP> <PEER_PORT>"
+            "Usage: python chat.py <NODE_NAME> <LOCAL_PORT> <PEER_IP> <PEER_PORT>"
         )
         sys.exit(1)
 

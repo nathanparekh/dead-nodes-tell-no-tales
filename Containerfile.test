@@ -1,26 +1,18 @@
-FROM docker.io/library/debian:bookworm-slim
+FROM python:3.11-alpine
 WORKDIR /test
 
-# 1. Add backports for up-to-date network packages
-RUN apt-get update && apt-get install -y ca-certificates && \
-    echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/sources.list
+# bash for the #!/bin/bash test scripts; curl to drive the host breakout receiver.
+# (python3 is already in the base image; nothing here needs podman or sudo anymore.)
+RUN apk add --no-cache bash curl
 
-# 2. Install curl (used to drive the host breakout receiver), sudo, python3
-RUN apt-get update && apt-get install -y \
-    curl \
-    sudo \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy the compiled C counter app into system PATH
+# Copy the counter app into the test workdir
 COPY src/counter.py .
 
 # Copy tests layout
-COPY test/run_tests.sh run_tests
 COPY test/ .
 
-RUN chmod +x run_tests *.sh counter.py
+RUN chmod +x *.sh counter.py
 
-ENTRYPOINT ["./run_tests"]
+ENTRYPOINT ["./run_tests.sh"]
 
 STOPSIGNAL SIGKILL
