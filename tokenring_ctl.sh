@@ -98,19 +98,38 @@ ensure_ctl() {
     fi
 }
 
+# Poll until every named container is Running. build_tokenring.sh ends with a
+# blocking `podman logs -f <sidecar>` and so NEVER returns -- we must synchronize
+# on container state, not by `wait`ing on the (immortal) deploy job.
+wait_running() {
+    local name up i
+    for name in "$@"; do
+        up=false
+        for i in $(seq 1 60); do
+            if [ "$(sudo podman inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = "true" ]; then
+                up=true; break
+            fi
+            sleep 1
+        done
+        [ "$up" = true ] || { echo "[!] $name did not come up within 60s" >&2; return 1; }
+    done
+}
+
 # 3. Bring up the three ring nodes a/b/c via build_tokenring.sh. a/b boot WITHOUT
 #    the token, c boots WITH it (HAS_TOKEN=1) and must be deployed LAST so its
 #    successor (a) is already listening when the boot token is forwarded. This
 #    yields exactly one token in the ring. Each node carries its own sidecar.
 ensure_nodes() {
     echo "[*] Deploying ring nodes a -> b -> c -> a (c holds the boot token)"
+    # build_tokenring.sh tails the sidecar logs (podman logs -f) and never exits,
+    # so background each deploy and poll for the containers -- a bare `wait` here
+    # would hang forever on that log tail.
     ( cd "$ROOT" && ./build_tokenring.sh a A 0 y ) >/dev/null 2>&1 &
     ( cd "$ROOT" && ./build_tokenring.sh b B 0 y ) >/dev/null 2>&1 &
-    wait
-    # c LAST and with the token; build_tokenring.sh tails the sidecar logs, so run
-    # it backgrounded and just give it a beat to come up.
+    wait_running tokenring-a sidecar-a tokenring-b sidecar-b || return 1
+    # c LAST and with the token, so its successor (a) is already listening.
     ( cd "$ROOT" && ./build_tokenring.sh c C 1 y ) >/dev/null 2>&1 &
-    sleep 4
+    wait_running tokenring-c sidecar-c || return 1
     echo "[*] Ring nodes deployed."
 }
 
