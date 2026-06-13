@@ -12,18 +12,23 @@
 # Usage (run on the EC2 host, from the repo root):
 #   ./local_mesh.sh up               # create bridge, deploy a/b/c, warm + verify total=30
 #   ./local_mesh.sh snapshot <id>    # traffic across the cut, restore a/b/c, verify total=30
-#   ./local_mesh.sh delayed  <id>    # like snapshot, but DELAY (+light loss) during the cut
+#   ./local_mesh.sh delayed  <id>    # like snapshot, but DELAY (+light loss) during cut AND restore
 #   ./local_mesh.sh dropped  <id>    # like snapshot, but DROP packets during cut AND restore
+#   ./local_mesh.sh lossy   [secs]   # heavy packet loss under load, NO snapshot (RUDP-only baseline)
 #   ./local_mesh.sh down             # tear everything down (idempotent)
 #
-# All three cut-tests drive live ring traffic across the cut so the snapshot has
-# real in-flight channel state to capture. Conservation of the total (==30) is
-# the correctness signal: RUDP retransmit + a consistent global cut preserve it
-# despite delay/loss; a dropped in-flight credit would settle below 30.
+# The cut-tests (snapshot/delayed/dropped) drive live ring traffic across the cut
+# so the snapshot has real in-flight channel state to capture. For delayed/dropped
+# the netem fault is applied in BOTH the checkpoint and restore windows, enabled
+# BEFORE each so buffered sidecar packets are subject to it. The `lossy` mode runs
+# load under heavy loss with NO snapshot at all -- a control showing the RUDP proxy
+# alone conserves credits. Conservation of the total (==30) is the correctness
+# signal: a lost credit would settle below 30.
 #
 # Env: MESH_NET (default "vlan"),
 #      NETEM_DELAY (default "delay 200ms 50ms loss 10%")  -- the `delayed` test,
-#      NETEM_DROP  (default "loss 25%")                    -- the `dropped` test.
+#      NETEM_DROP  (default "loss 25%")                    -- the `dropped` test,
+#      NETEM_LOSSY (default "loss 40%")                    -- the `lossy` control.
 
 set -u
 
@@ -34,6 +39,7 @@ MESH_NET="${MESH_NET:-vlan}"
 export MESH_NET                       # build.sh / mesh_ctl.sh inherit it
 NETEM_DELAY="${NETEM_DELAY:-delay 200ms 50ms loss 10%}"
 NETEM_DROP="${NETEM_DROP:-loss 25%}"
+NETEM_LOSSY="${NETEM_LOSSY:-loss 40%}"
 
 A=10.24.24.10; B=10.24.24.11; C=10.24.24.12; PORT=5000
 EXPECTED=30                           # 3 nodes x 10; transfers conserve the total
@@ -167,12 +173,12 @@ verify_total() { # verify_total <id>
     return 1
 }
 
-# Shared core for snapshot/delayed/dropped. Live traffic flows throughout; netem
-# is applied to the CHECKPOINT window and/or the RESTORE window per the args
-# (empty arg => no netem for that window). Restore-window netem is applied to the
-# FRESH sidecars after run_restore -- CRIU recreates each node's netns, so any
-# qdisc set before restore is wiped; dropping "during restore" means dropping the
-# replay/resume traffic of the just-restored nodes.
+# Shared core for snapshot/delayed/dropped. Live traffic flows across the cut;
+# netem is applied to the CHECKPOINT window and/or the RESTORE window per the args
+# (empty arg => no netem for that window). Restore-window netem is ENABLED BEFORE
+# run_restore so packets buffered in the sidecars are subject to it as the restore
+# drains them; because CRIU recreates each node's netns during restore (wiping the
+# qdisc), it is also re-applied to the fresh restore-mode sidecars right after.
 run_cut() { # run_cut <id> <checkpoint-netem> <restore-netem>
     local id="$1" ckpt_netem="$2" rst_netem="$3"
     ensure_up
@@ -202,12 +208,21 @@ run_cut() { # run_cut <id> <checkpoint-netem> <restore-netem>
     report_inflight "$id"
 
     # --- restore / resume window ---
+    if [ -n "$rst_netem" ]; then
+        # Enable netem BEFORE the restore so packets already buffered in the
+        # sidecars are subject to it as the restore drains them -- not just a
+        # later burst. (netem is on the mesh iface; run_restore talks to the
+        # receiver over the breakout net, so the restore ops are unaffected.)
+        echo "[*] netem enabled before restore: $rst_netem"
+        netem_on "$rst_netem"
+    fi
     echo "[*] restoring a b c from snapshot '$id'"
     ./run_restore.sh "$id" a b c
     if [ -n "$rst_netem" ]; then
-        # Drop the restored nodes' resume traffic: bring loss back on the fresh
-        # sidecars and push a short live burst through it.
-        echo "[*] dropping restored-node resume traffic: $rst_netem"
+        # CRIU recreated each node's netns, wiping the qdisc -> re-apply to the
+        # fresh restore-mode sidecars and push a short live burst through it so the
+        # resume traffic keeps getting dropped/delayed.
+        echo "[*] re-applying netem to restored sidecars + exercising resume: $rst_netem"
         netem_on "$rst_netem"
         start_traffic
         sleep 3
@@ -238,6 +253,24 @@ cmd_up() {
     fi
 }
 
+cmd_lossy() { # cmd_lossy [seconds] -- heavy packet loss under load, NO snapshot.
+              # A control: shows the RUDP proxy alone conserves credits under loss,
+              # with no Chandy-Lamport cut or restore involved.
+    local secs="${1:-15}"
+    ensure_up
+    echo "[*] resetting baseline (total=$EXPECTED)"
+    bootstrap_retry || return 1
+    echo "[*] applying heavy loss (no snapshot): $NETEM_LOSSY"
+    netem_on "$NETEM_LOSSY"
+    start_traffic
+    echo "[*] running ring traffic under heavy loss for ${secs}s (no snapshot)..."
+    sleep "$secs"
+    stop_traffic
+    netem_off
+    sleep 3                       # let RUDP retransmit drain the backlog
+    verify_total "lossy"
+}
+
 cmd_down() {
     echo "[*] tearing down single-host mesh"
     # Remove dependents (sidecars share their parent's netns) BEFORE parents, or
@@ -261,8 +294,9 @@ cmd_down() {
 case "${1:-}" in
     up)        cmd_up ;;
     snapshot)  shift; run_cut "${1:-snap1}"        ""             "" ;;
-    delayed)   shift; run_cut "${1:-snap-delayed}" "$NETEM_DELAY" "" ;;
+    delayed)   shift; run_cut "${1:-snap-delayed}" "$NETEM_DELAY" "$NETEM_DELAY" ;;
     dropped)   shift; run_cut "${1:-snap-dropped}" "$NETEM_DROP"  "$NETEM_DROP" ;;
+    lossy)     shift; cmd_lossy "${1:-15}" ;;
     down)      cmd_down ;;
-    *) echo "usage: $0 {up | snapshot <id> | delayed <id> | dropped <id> | down}" >&2; exit 1 ;;
+    *) echo "usage: $0 {up | snapshot <id> | delayed <id> | dropped <id> | lossy [secs] | down}" >&2; exit 1 ;;
 esac
