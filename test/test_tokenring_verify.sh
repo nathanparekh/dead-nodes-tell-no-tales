@@ -118,10 +118,18 @@ phase "OPERATE: confirm exactly one token circulates (app verify via control con
 
 # --------------------------------------------------------------------- force token in flight + snapshot
 phase "POSITION: hold the token IN FLIGHT on the A->B hop (netem ${NETEM_MS}ms), then snapshot"
-# Delay A's egress so a token forwarded A->B sits in the channel long enough to be
-# caught as channel state by the cut (mirrors harness/demo_token_ring.sh).
-podman exec sidecar-a tc qdisc replace dev eth0 root netem delay "${NETEM_MS}ms" \
-    || die "failed to apply netem on the A->B hop (sidecar-a)"
+# Delay ONLY A's traffic to B (u32 dst filter), so a token forwarded A->B sits in
+# the channel long enough to be caught as channel state by the cut. A blanket
+# `root netem` would also delay A's STATUS replies and snapshot markers -- which
+# stalls wait_inflight (0.2s query timeout) and skews the cut. This mirrors
+# harness/node_ctl.sh's netem-on (the targeted form demo_token_ring.sh uses).
+podman exec sidecar-a tc qdisc add dev eth0 root handle 1: prio \
+    || die "failed to add prio qdisc on sidecar-a"
+podman exec sidecar-a tc qdisc add dev eth0 parent 1:3 handle 30: netem delay "${NETEM_MS}ms" \
+    || die "failed to add netem class on sidecar-a"
+podman exec sidecar-a tc filter add dev eth0 protocol ip parent 1: prio 1 \
+    u32 match ip dst "$B_IP/32" flowid 1:3 \
+    || die "failed to add A->B netem filter on sidecar-a"
 
 echo "[*] waiting for the token to commit to the A->B wire (wait_inflight.py)"
 podman run --rm --network vlan -v "$ROOT/harness:/h:ro" --entrypoint python3 \
