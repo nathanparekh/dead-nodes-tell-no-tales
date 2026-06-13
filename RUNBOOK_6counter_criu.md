@@ -35,24 +35,38 @@ raw UDP). Redeploy both nodes with the matching script when switching.
 
 ## 2. Run the counterexample — driver on node A
 
+`test_6counter_criu.sh` checkpoints `LOCAL_LETTERS` (default **all six**,
+`a b c d e f`), and CRIU is host-local — so the default assumes all six
+counters run on **one host**:
+
+```bash
+# single host running all six:
+./test/test_6counter_criu.sh                 # or: ./test/test_6counter_criu.sh myid
+```
+
+For the genuine 2-node split (a,b,c on A; d,e,f on B), tell the driver to
+checkpoint only its own three and capture the other node's three over there
+while the load is flowing (`POST_SNAP_SECS=30` buys slack):
+
 ```bash
 # on node A:
-./test/test_6counter_criu.sh                 # or: ./test/test_6counter_criu.sh myid
-# on node B, while the driver's load is flowing (POST_SNAP_SECS=30 buys slack):
+LOCAL_LETTERS="a b c" POST_SNAP_SECS=30 ./test/test_6counter_criu.sh criu6
+# on node B, while A's load is still flowing:
 ./test/criu_capture.sh criu6 d e f
 ```
 
 The driver mirrors `test_6counter.sh`: reset to 10 each (total 60), warm the
 ring, run the multithreaded load, and — while the load is flowing — checkpoint
-this node's three counters with plain CRIU, **in parallel** (as close to
+its `LOCAL_LETTERS` counters with plain CRIU, **in parallel** (as close to
 "simultaneous" as an uncoordinated capture can get). It then keeps the load
 running, stops it, and verifies the **live** total is still 60
 (`--leave-running` means the capture disturbed nothing — any loss seen later
-is the capture's fault, not the load's).
+is the capture's fault, not the load's). When some counters are remote, it
+prints the exact `criu_capture.sh` / `restore_criu.sh` commands for them.
 
-Capturing node B under the same load gives the canonical lost-in-flight demo,
-but ANY timing works: with no coordination protocol the six images can never
-form a consistent cut — that is the point.
+Capturing under the same load gives the canonical lost-in-flight demo, but ANY
+timing works: with no coordination protocol the six images can never form a
+consistent cut — that is the point.
 
 Artifacts land per node in `/tmp/criu-<id>-counter-<letter>.tar.zst` (the
 `criu-` prefix keeps them apart from the sidecar flow's `snapshot-` images).

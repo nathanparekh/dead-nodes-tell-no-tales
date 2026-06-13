@@ -28,12 +28,13 @@
 #      total — that failure is the counterexample, to be contrasted with
 #      test_6counter.sh + run_restore.sh where the total survives.
 #
-# Like test_6counter.sh this driver runs on ONE node (physical A) with no SSH.
-# Capture node B's three with `./test/criu_capture.sh <id> d e f` over there —
-# while this driver's load is still flowing (give yourself slack with
-# POST_SNAP_SECS=30) for the canonical lost-in-flight demonstration, though ANY
-# timing yields an inconsistent cut: there is no coordination protocol, which
-# is the point.
+# LOCAL_LETTERS (default "a b c d e f") is the set this driver checkpoints, and
+# CRIU is host-local: the default assumes all six counters run on THIS host. For
+# the 2-node split (a,b,c on A; d,e,f on B), set LOCAL_LETTERS="a b c" here and
+# capture B's three over there with `./test/criu_capture.sh <id> d e f` — while
+# this driver's load is still flowing (give yourself slack with POST_SNAP_SECS=30)
+# for the canonical lost-in-flight demonstration. Either way there is no
+# coordination protocol, so ANY timing yields an inconsistent cut — the point.
 set -u
 
 cd "$(dirname "$0")/.."
@@ -45,10 +46,20 @@ MESH_NET="${MESH_NET:-vlan}"
 CTL=mesh-ctl-np           # sidecar-LESS control container. mesh_ctl.sh's
 CTL_IP=10.24.24.201       # mesh-ctl carries a TPROXY sidecar that would tunnel
                           # RUDP at counters with nothing to de-tunnel it.
-LOCAL_LETTERS=(${LOCAL_LETTERS:-a b c})   # this node's counters (physical A)
+LOCAL_LETTERS=(${LOCAL_LETTERS:-a b c d e f})   # counters to checkpoint locally
 IPS=(10.24.24.10 10.24.24.11 10.24.24.12 10.24.24.13 10.24.24.14 10.24.24.15)
 N=${#IPS[@]}
 TOTAL=$(( PER_NODE * N ))    # 60
+
+# The full ring is a..f; whatever this node does NOT checkpoint locally must be
+# captured on the host that runs it (CRIU is host-local). Default LOCAL_LETTERS
+# is all six, so REMOTE_LETTERS is empty and the split-node reminders below stay
+# silent; for the 2-node run (LOCAL_LETTERS="a b c") it becomes "d e f".
+ALL_LETTERS=(a b c d e f)
+REMOTE_LETTERS=()
+for x in "${ALL_LETTERS[@]}"; do
+    case " ${LOCAL_LETTERS[*]} " in *" $x "*) ;; *) REMOTE_LETTERS+=("$x") ;; esac
+done
 
 # Same load knobs as test_6counter.sh (see there for why it is multithreaded:
 # one-at-a-time transfers leave the channels ~always empty, and an empty
@@ -177,8 +188,10 @@ fi
 #    keeps processing operations after the dump (which the restore will later
 #    roll back — uncoordinated images cannot agree on a point in time).
 echo "[*] Capture done; KEEPING operations running for ${POST_SNAP_SECS}s after it..."
-echo "    (to capture node B under this same load, run there now:"
-echo "         ./test/criu_capture.sh $SNAP_ID d e f )"
+if [ "${#REMOTE_LETTERS[@]}" -ne 0 ]; then
+    echo "    (capture the remaining counters under this same load, on their host now:"
+    echo "         ./test/criu_capture.sh $SNAP_ID ${REMOTE_LETTERS[*]} )"
+fi
 sleep "$POST_SNAP_SECS"
 
 echo "[*] Stopping load..."
@@ -201,13 +214,19 @@ fi
 echo
 echo "Capture '$SNAP_ID' artifacts are PER NODE (on each node's local /tmp):"
 echo "    /tmp/criu-$SNAP_ID-counter-<letter>.tar.zst   (bare CRIU image, no channel state)"
-echo "If node B has not captured yet, run there: ./test/criu_capture.sh $SNAP_ID d e f"
+echo "Captured on this host: ${LOCAL_LETTERS[*]}"
+if [ "${#REMOTE_LETTERS[@]}" -ne 0 ]; then
+    echo "Still to capture on their host: ./test/criu_capture.sh $SNAP_ID ${REMOTE_LETTERS[*]}"
+fi
 echo "(any timing works — with no coordination the six images can never form a"
 echo "consistent cut; capturing under load maximizes the lost in-flight credits)."
 echo
-echo "To demonstrate the counterexample:"
-echo "    node A:   ./test/restore_criu.sh $SNAP_ID a b c"
-echo "    node B:   ./test/restore_criu.sh $SNAP_ID d e f"
-echo "    either:   ./test/verify_sum_noproxy.sh        # EXPECT: VIOLATED (total != $TOTAL)"
+echo "To demonstrate the counterexample, restore PER NODE (each host restores the"
+echo "letters it captured), then verify from one node:"
+echo "    this host:  ./test/restore_criu.sh $SNAP_ID ${LOCAL_LETTERS[*]}"
+if [ "${#REMOTE_LETTERS[@]}" -ne 0 ]; then
+    echo "    other host: ./test/restore_criu.sh $SNAP_ID ${REMOTE_LETTERS[*]}"
+fi
+echo "    verify:     ./test/verify_sum_noproxy.sh        # EXPECT: VIOLATED (total != $TOTAL)"
 echo "Contrast with test_6counter.sh + run_restore.sh + verify_sum.sh, where the"
 echo "sidecar Chandy-Lamport cut + channel replay keeps the total at $TOTAL."
