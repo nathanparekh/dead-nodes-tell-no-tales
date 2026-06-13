@@ -166,10 +166,10 @@ bootstrap_retry() { # warm + verify total=30, retrying while the mesh settles --
 verify_total() { # verify_total <id>
     echo "[*] verifying conserved total == $EXPECTED"
     if ./mesh_ctl.sh sum "$A" "$PORT" "$B" "$PORT" "$C" "$PORT" "$EXPECTED" 8000 5; then
-        echo "[PASS] total == $EXPECTED after snapshot+restore ($1)"
+        echo "[PASS] total == $EXPECTED conserved ($1)"
         return 0
     fi
-    echo "[FAIL] total != $EXPECTED after snapshot+restore ($1)" >&2
+    echo "[FAIL] total != $EXPECTED ($1)" >&2
     return 1
 }
 
