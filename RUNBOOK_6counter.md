@@ -79,14 +79,18 @@ The driver, all through the control container (`mesh-ctl`):
 3. Starts a **multithreaded** load generator inside the control container —
    `LOAD_THREADS` threads (default 8) all firing ring transfers at once, so many
    node→node CREDIT messages are genuinely **in transit on the channels** while
-   the cut is taken. Each transfer nets to zero, so the total stays `60`. It runs
-   for `LOAD_SECS` (default 8) and self-terminates.
-4. After `PRE_SNAP_SECS` (default 3) of load, triggers a global snapshot
-   (`trigger_snapshot.sh a <snap_id>`) **mid-flight**; the load keeps running
-   across the marker sweep, then stops itself.
+   the cut is taken. Each transfer nets to zero, so the total stays `60`.
+4. Runs the load **continuously across three phases**: `PRE_SNAP_SECS` (default 3)
+   before triggering the snapshot, through the marker sweep, and then — after
+   **waiting for the cut to actually finish** (the initiator's artifact appearing
+   locally, up to `SNAP_WAIT_SECS`) — for `POST_SNAP_SECS` (default 5) *more*, so
+   the system is shown still processing operations **after** the snapshot
+   completes. The load is then stopped via a sentinel file (`LOAD_MAX_SECS` is a
+   backstop so it can never run forever).
 5. Re-verifies the total returns to `60`.
 
-Tune the load with env vars, e.g. `LOAD_THREADS=16 LOAD_SECS=12 ./test/test_6counter.sh`.
+Tune the load with env vars, e.g.
+`LOAD_THREADS=16 POST_SNAP_SECS=10 ./test/test_6counter.sh`.
 
 > **Why multithreaded?** A single, one-at-a-time transfer loop leaves the
 > channels empty almost always: RUDP delivers and ACKs each CREDIT in well under

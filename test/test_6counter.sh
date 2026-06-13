@@ -36,9 +36,18 @@ TOTAL=$(( PER_NODE * N ))    # 60
 # flight at once -- otherwise node->node CREDITs are delivered+ACKed faster than
 # the marker sweep, the channels are ~always empty, and the snapshot records no
 # in-flight state (the whole point of a Chandy-Lamport cut). Tune via env.
-LOAD_THREADS="${LOAD_THREADS:-8}"     # concurrent in-flight transfer streams
-LOAD_SECS="${LOAD_SECS:-8}"           # total seconds of load (self-terminates)
-PRE_SNAP_SECS="${PRE_SNAP_SECS:-3}"   # load-only seconds before the snapshot fires
+#
+# The load runs continuously across THREE phases -- before the snapshot, during
+# the marker sweep, and (crucially) for POST_SNAP_SECS AFTER the cut has been
+# confirmed finished -- so the test shows the system still processing operations
+# once the snapshot completes. It is stopped deterministically via a sentinel
+# file (the alpine control image has no pkill), with LOAD_MAX_SECS as a backstop.
+LOAD_THREADS="${LOAD_THREADS:-8}"       # concurrent in-flight transfer streams
+PRE_SNAP_SECS="${PRE_SNAP_SECS:-3}"     # load-only seconds before the snapshot fires
+POST_SNAP_SECS="${POST_SNAP_SECS:-5}"   # KEEP operating this long AFTER the cut finishes
+SNAP_WAIT_SECS="${SNAP_WAIT_SECS:-30}"  # max seconds to wait for the cut to finish
+LOAD_MAX_SECS="${LOAD_MAX_SECS:-120}"   # hard cap so the blaster can never run forever
+STOP_FILE="/tmp/stop_load_$SNAP_ID"     # touch (in mesh-ctl) to stop the load
 
 # Run a counter.py verb inside the already-running control container.
 ctl() { sudo podman exec mesh-ctl ./counter.py "$@"; }
@@ -79,18 +88,21 @@ verify_total() {
 # loop the channels were ~always empty and the cut recorded nothing. Sends are
 # fire-and-forget (replies ignored); counter.py is unmodified. Every TRANSFER
 # debits one node and credits the next, so the global total stays conserved
-# regardless of where the run is cut off. The blaster exits after LOAD_SECS on
-# its own, so there is nothing to kill or reap on the happy path.
+# regardless of where the run is cut off. It runs until the sentinel file appears
+# (driver-controlled, so the load can span before/during/after the cut) or the
+# LOAD_MAX_SECS backstop trips -- so on the happy path there is nothing to reap.
 start_load() {
-    sudo podman exec -i mesh-ctl python3 - "$LOAD_SECS" "$LOAD_THREADS" "${IPS[@]}" <<'PY' >/dev/null 2>&1 &
-import socket, sys, threading, time, random
-secs = float(sys.argv[1]); nthreads = int(sys.argv[2]); members = sys.argv[3:]
+    sudo podman exec mesh-ctl rm -f "$STOP_FILE" 2>/dev/null || true
+    sudo podman exec -i mesh-ctl python3 - \
+        "$LOAD_MAX_SECS" "$LOAD_THREADS" "$STOP_FILE" "${IPS[@]}" <<'PY' >/dev/null 2>&1 &
+import socket, sys, threading, time, random, os
+cap = float(sys.argv[1]); nthreads = int(sys.argv[2]); stop = sys.argv[3]; members = sys.argv[4:]
 PORT = 5000
-deadline = time.time() + secs
+deadline = time.time() + cap
 def worker():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     n = len(members)
-    while time.time() < deadline:
+    while time.time() < deadline and not os.path.exists(stop):
         i = random.randrange(n)
         frm, to = members[i], members[(i + 1) % n]
         try:
@@ -103,6 +115,27 @@ for t in ts: t.start()
 for t in ts: t.join()
 PY
     LOAD_PID=$!
+}
+
+# Stop the load: drop the sentinel (the blaster's threads see it and exit), then
+# reap the backgrounded podman exec. Idempotent -- safe to call from the trap.
+stop_load() {
+    sudo podman exec mesh-ctl touch "$STOP_FILE" 2>/dev/null || true
+    [ -n "${LOAD_PID:-}" ] && wait "$LOAD_PID" 2>/dev/null
+}
+
+# Wait until the global cut has actually finished, with the load still running.
+# The initiator (counter-$INIT_NODE) is the last to finalize -- it waits for all
+# its markers to return -- so its artifact appearing on THIS node's local /tmp is
+# our signal that the cut is done. (Per-node store; observable locally, no SSH.)
+wait_snapshot() {
+    local art="/tmp/snapshot-$SNAP_ID-counter-$INIT_NODE.json" i
+    for i in $(seq 1 "$SNAP_WAIT_SECS"); do
+        [ -f "$art" ] && { echo "    cut recorded: $art"; return 0; }
+        sleep 1
+    done
+    echo "    WARN: cut artifact $art not seen after ${SNAP_WAIT_SECS}s; continuing anyway" >&2
+    return 1
 }
 
 # Flush the neighbor (ARP) cache of every sidecar netns we can reach on THIS
@@ -142,11 +175,10 @@ done
 echo "[*] Pre-load check: total should settle at $TOTAL"
 verify_total "$TOTAL" || { echo "FAIL: counters did not reach $TOTAL before load"; exit 1; }
 
-# 2. Start the multithreaded load. The EXIT trap only matters if we bail out
-#    early; on the happy path the blaster self-terminates after LOAD_SECS.
+# 2. Start the multithreaded load. The trap stops it on any early exit.
 start_load
-trap 'kill "$LOAD_PID" 2>/dev/null' EXIT
-echo "[*] Load generator running ($LOAD_THREADS threads, ${LOAD_SECS}s, pid $LOAD_PID);"
+trap stop_load EXIT
+echo "[*] Load generator running ($LOAD_THREADS threads, pid $LOAD_PID);"
 echo "    letting traffic flow BEFORE the snapshot..."
 sleep "$PRE_SNAP_SECS"
 
@@ -156,11 +188,17 @@ echo "    (watch a sidecar's logs for 'Caching in-flight message seq ...' -- tha
 echo "     recorded channel state, and it only appears because the channels are busy.)"
 ./trigger_snapshot.sh "$INIT_NODE" "$SNAP_ID"
 
-# 4. Let the load run out the rest of LOAD_SECS (covering the marker sweep); it
-#    then stops itself. Wait for it, then let the in-flight credits drain.
-echo "[*] Snapshot triggered; load continues until it finishes..."
-wait "$LOAD_PID" 2>/dev/null; trap - EXIT
-echo "[*] Load generator finished; letting in-flight credits drain..."
+# 4. Keep operating ACROSS the cut: wait (load still running) for the cut to
+#    finish, then deliberately keep the load going for POST_SNAP_SECS more so the
+#    system is shown still processing operations AFTER the snapshot completes.
+echo "[*] Snapshot triggered; waiting for the cut to finish (load still running)..."
+wait_snapshot || true
+echo "[*] Cut finished; KEEPING operations running for ${POST_SNAP_SECS}s after the snapshot..."
+sleep "$POST_SNAP_SECS"
+
+echo "[*] Stopping load..."
+stop_load; trap - EXIT
+echo "[*] Load stopped; letting in-flight credits drain..."
 sleep 1
 
 # 5. Verify conservation once traffic has drained.
