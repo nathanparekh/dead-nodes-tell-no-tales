@@ -79,6 +79,13 @@ if [ "$PROXY" = true ]; then
     # 3. Launch the sidecar sharing the EXACT same network namespace
     # It requires NET_ADMIN to implement the TPROXY rules inside that namespace
     echo "[*] Attaching Sidecar Proxy: $SIDECAR_NAME"
+    # CHECKPOINT_TARGET MUST be the app container: the snapshot handler runs in the
+    # sidecar but the sidecar shares the app's netns with a separate UTS, so its
+    # gethostname() is the SIDECAR's own id. Unset, the handler falls back to that
+    # and tries to CRIU the sidecar -- which depends on the app's netns, so podman
+    # refuses ("cannot export checkpoints of containers with dependencies"). The
+    # sidecar is never checkpointed; its state is the channel-state cut saved via
+    # the breakout receiver. (Matches main's build.sh.)
     sudo podman run -d --replace \
       --name "$SIDECAR_NAME" \
       --network "container:$APP_NAME" \
@@ -86,7 +93,9 @@ if [ "$PROXY" = true ]; then
       --sysctl net.ipv4.ip_nonlocal_bind=1 \
       -e MESH_SUBNET="$MESH_SUBNET" \
       -e BREAKOUT_URL="$BREAKOUT_URL" \
+      -e CHECKPOINT_TARGET="$APP_NAME" \
+      ${MESH_MEMBERS:+-e MESH_MEMBERS="$MESH_MEMBERS"} \
       sidecar
-
-    sudo podman logs -f $SIDECAR_NAME
+    # NOTE: do NOT tail `podman logs -f` here -- it blocks forever and callers
+    # that background this deploy (tokenring_ctl.sh) would never see it return.
 fi
