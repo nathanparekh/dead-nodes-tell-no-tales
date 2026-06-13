@@ -145,6 +145,21 @@ report_inflight() { # report_inflight <id> -- informational, not a gate
     done
 }
 
+wait_mesh_ready() { # poll until every node answers -- sidecar TPROXY needs a
+                    # moment after deploy, so warming immediately can miss a node
+    local ip i ok
+    echo "[*] waiting for all nodes to answer (sidecar TPROXY ready)"
+    for i in $(seq 1 20); do
+        ok=1
+        for ip in "$A" "$B" "$C"; do
+            ./mesh_ctl.sh state "$ip" "$PORT" >/dev/null 2>&1 || ok=0
+        done
+        [ "$ok" = 1 ] && { echo "[*] all nodes reachable"; return 0; }
+        sleep 1
+    done
+    echo "WARN: not all nodes reachable after 20s; continuing anyway" >&2
+}
+
 verify_total() { # verify_total <id>
     echo "[*] verifying conserved total == $EXPECTED"
     if ./mesh_ctl.sh sum "$A" "$PORT" "$B" "$PORT" "$C" "$PORT" "$EXPECTED" 8000 5; then
@@ -211,6 +226,7 @@ cmd_up() {
     ./build.sh a A
     ./build.sh b B
     ./build.sh c C
+    wait_mesh_ready
     echo "[*] warming + verifying baseline (total=$EXPECTED)"
     if ./mesh_ctl.sh bootstrap 10; then
         echo "[OK] mesh up; total == $EXPECTED verified; ready to snapshot"
