@@ -115,22 +115,51 @@ wait_running() {
     done
 }
 
+# Poll node logs until the token is actually circulating: some node has logged a
+# RECEIVE (the token arrived over the proxy) or a REGENERATE (loss recovery minted
+# one). Returns as soon as a token exists, so the caller never hands a tokenless
+# ring to `verify`. Covers up to a full LOSS_TIMEOUT_MS regeneration.
+wait_token() {
+    local i x
+    for i in $(seq 1 "${1:-80}"); do
+        for x in a b c; do
+            if sudo podman logs "tokenring-$x" 2>&1 | grep -qE "RECEIVE|REGENERATE"; then
+                return 0
+            fi
+        done
+        sleep 1
+    done
+    return 1
+}
+
 # 3. Bring up the three ring nodes a/b/c via build_tokenring.sh. a/b boot WITHOUT
 #    the token, c boots WITH it (HAS_TOKEN=1) and must be deployed LAST so its
 #    successor (a) is already listening when the boot token is forwarded. This
 #    yields exactly one token in the ring. Each node carries its own sidecar.
+#
+#    Two proxy-mode realities are handled here:
+#    - The app forwards its boot token HOLD_MS after start, but the sidecar (which
+#      installs the TPROXY rules) starts AFTER the app. With the 500ms default the
+#      boot token egresses before the sidecar is ready and is lost. We default
+#      HOLD_MS high enough (5s) that c's sidecar is up before the boot forward.
+#    - LOSS_TIMEOUT_MS (default 60s, matching the demo) lets the ring self-heal a
+#      lost token by regeneration; it must stay well above NETEM_MS so the
+#      deliberate in-flight hold in the verify test never triggers a false regen.
 ensure_nodes() {
-    echo "[*] Deploying ring nodes a -> b -> c -> a (c holds the boot token)"
+    local HOLD_MS_V="${HOLD_MS:-5000}" LOSS_V="${LOSS_TIMEOUT_MS:-60000}"
+    echo "[*] Deploying ring nodes a -> b -> c -> a (c holds the boot token; HOLD_MS=$HOLD_MS_V LOSS_TIMEOUT_MS=$LOSS_V)"
     # build_tokenring.sh tails the sidecar logs (podman logs -f) and never exits,
     # so background each deploy and poll for the containers -- a bare `wait` here
     # would hang forever on that log tail.
-    ( cd "$ROOT" && ./build_tokenring.sh a A 0 y ) >/dev/null 2>&1 &
-    ( cd "$ROOT" && ./build_tokenring.sh b B 0 y ) >/dev/null 2>&1 &
+    ( cd "$ROOT" && HOLD_MS="$HOLD_MS_V" LOSS_TIMEOUT_MS="$LOSS_V" ./build_tokenring.sh a A 0 y ) >/dev/null 2>&1 &
+    ( cd "$ROOT" && HOLD_MS="$HOLD_MS_V" LOSS_TIMEOUT_MS="$LOSS_V" ./build_tokenring.sh b B 0 y ) >/dev/null 2>&1 &
     wait_running tokenring-a sidecar-a tokenring-b sidecar-b || return 1
     # c LAST and with the token, so its successor (a) is already listening.
-    ( cd "$ROOT" && ./build_tokenring.sh c C 1 y ) >/dev/null 2>&1 &
+    ( cd "$ROOT" && HOLD_MS="$HOLD_MS_V" LOSS_TIMEOUT_MS="$LOSS_V" ./build_tokenring.sh c C 1 y ) >/dev/null 2>&1 &
     wait_running tokenring-c sidecar-c || return 1
-    echo "[*] Ring nodes deployed."
+    echo "[*] Ring nodes deployed; waiting for the token to start circulating..."
+    wait_token || { echo "[!] no token observed circulating (boot token lost AND no regen?)" >&2; return 1; }
+    echo "[*] Token is circulating."
 }
 
 # Run the app client inside the control container. The token-ring client verbs
