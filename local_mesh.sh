@@ -194,8 +194,11 @@ run_cut() { # run_cut <id> <checkpoint-netem> <restore-netem>
     ./trigger_snapshot.sh a "$id"
     wait_for_artifacts "$id"; local arts=$?
     [ -n "$ckpt_netem" ] && netem_off
+    # The cut is captured once the artifacts exist; quiesce traffic BEFORE the
+    # restore -- letting mesh-ctl fire transfers at a container while CRIU is
+    # rebuilding it makes the restore flake.
+    stop_traffic
     if [ "$arts" -ne 0 ]; then
-        stop_traffic
         echo "[FAIL] snapshot artifacts incomplete" >&2
         return 1
     fi
@@ -205,13 +208,16 @@ run_cut() { # run_cut <id> <checkpoint-netem> <restore-netem>
     echo "[*] restoring a b c from snapshot '$id'"
     ./run_restore.sh "$id" a b c
     if [ -n "$rst_netem" ]; then
-        echo "[*] netem during restore/resume: $rst_netem"
-        netem_on "$rst_netem"     # fresh sidecars are up now; drop the resume traffic
+        # Drop the restored nodes' resume traffic: bring loss back on the fresh
+        # sidecars and push a short live burst through it.
+        echo "[*] dropping restored-node resume traffic: $rst_netem"
+        netem_on "$rst_netem"
+        start_traffic
         sleep 3
+        stop_traffic
         netem_off
     fi
 
-    stop_traffic
     sleep 3                       # let RUDP deliver any last in-flight credits
     verify_total "$id"
 }
