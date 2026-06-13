@@ -166,35 +166,8 @@ netem_off
 echo "[*] artifacts present:"
 ls -l /tmp/snapshot-"$SID"-tokenring-*.json
 
-# --------------------------------------------------------------------- VERIFY (1): directly from the cut
-phase "VERIFY (1): exactly-one-token DIRECTLY from the recorded cut"
-# Holder state half: read each node's in-node 'have' from its loopback STATUS NOW
-# (the cut left the apps --leave-running, so their state still reflects the cut:
-# the token left A and has not reached B, so no node holds it; it lives ONLY in
-# B's recorded channel). Build the {node_id: holds} map for the checker.
-HOLD_ARGS=()
-echo "[*] in-node token holders at the cut (loopback STATUS):"
-for x in a b c; do
-    st=$(status_loopback "$x")
-    echo "    tokenring-$x: ${st:-<no reply>}"
-    if echo "$st" | grep -q "have=1"; then HOLD_ARGS+=(--holds "tokenring-$x"); fi
-done
-
-# Channel-state half + status==complete + control-exclusion are all asserted by
-# the checker over the on-disk artifacts. Total (holders + in-flight TOKENs) must
-# be exactly 1. With the token caught in flight, expect holders=0, inflight=1.
-if python3 "$CHECKER" "${HOLD_ARGS[@]}" \
-        "/tmp/snapshot-$SID-tokenring-a.json" \
-        "/tmp/snapshot-$SID-tokenring-b.json" \
-        "/tmp/snapshot-$SID-tokenring-c.json"; then
-    V_CUT=PASS
-else
-    V_CUT=FAIL
-fi
-echo "[*] VERIFY (1) from-cut: $V_CUT (expected PASS: exactly one token in node-states UNION channels)"
-
-# Diagnostic: confirm the in-flight TOKEN really is in B's channel (channel-state
-# half exercised), not resting in a node (which would be a weaker test).
+# Diagnostic (static artifacts): confirm the in-flight TOKEN really is in B's
+# channel (channel-state half exercised), not resting in a node (weaker test).
 if python3 -c 'import json,base64,sys
 d=json.load(open(sys.argv[1]))
 msgs=[m for p in d.get("peers",{}).values() for m in p.get("channel",[])]
@@ -207,8 +180,13 @@ else
     echo "[!]       Raise NETEM_MS (currently $NETEM_MS) to catch it on the wire."
 fi
 
-# --------------------------------------------------------------------- VERIFY (2): end-to-end restore
-phase "VERIFY (2): restore the WHOLE system, replay channels, assert exactly one token live"
+# --------------------------------------------------------------------- RESTORE the CRIU node state
+# Both verifies need the cut-time NODE state, which lives ONLY in the CRIU images
+# -- NOT in the live --leave-running apps, whose state advances past the cut (the
+# netem-delayed in-flight token is delivered to them shortly after the cut). So
+# stop the live ring and CRIU-restore each app FIRST; read holders from the
+# restored apps BEFORE replaying any channel.
+phase "RESTORE: stop the live ring and CRIU-restore each app from its image"
 echo "[*] stopping sidecars then apps"
 for x in $RESTORE_NODES; do
     breakout_ok stop "{\"container_id\": \"sidecar-$x\"}"
@@ -218,8 +196,36 @@ echo "[*] restoring apps from their CRIU images"
 for x in $RESTORE_NODES; do
     breakout restore "{\"target_path\": \"/tmp/snapshot-$SID-tokenring-$x.tar.zst\"}"
 done
-echo "[*] letting restored apps start listening before replay"
+echo "[*] letting restored apps start listening"
 sleep 2
+
+# --------------------------------------------------------------------- VERIFY (1): directly from the cut
+phase "VERIFY (1): exactly-one-token DIRECTLY from the recorded cut (CRIU node state + channel cuts)"
+# Holder half: read each restored app's 'have' via loopback STATUS NOW, BEFORE the
+# replay sidecars run. A CRIU-restored app reflects its FROZEN cut-time state, so
+# the in-flight token has not yet been delivered to it -- this is the true holder
+# state at the cut (the live apps could not give it). Channel half + status==
+# complete + control-exclusion come from the on-disk cuts. Total must be exactly 1
+# (token caught in flight -> holders=0, inflight=1).
+HOLD_ARGS=()
+echo "[*] in-node token holders at the cut (restored apps, pre-replay):"
+for x in a b c; do
+    st=$(status_loopback "$x")
+    echo "    tokenring-$x: ${st:-<no reply>}"
+    if echo "$st" | grep -q "have=1"; then HOLD_ARGS+=(--holds "tokenring-$x"); fi
+done
+if python3 "$CHECKER" "${HOLD_ARGS[@]}" \
+        "/tmp/snapshot-$SID-tokenring-a.json" \
+        "/tmp/snapshot-$SID-tokenring-b.json" \
+        "/tmp/snapshot-$SID-tokenring-c.json"; then
+    V_CUT=PASS
+else
+    V_CUT=FAIL
+fi
+echo "[*] VERIFY (1) from-cut: $V_CUT (expected PASS: exactly one token in node-states UNION channels)"
+
+# --------------------------------------------------------------------- VERIFY (2): end-to-end replay
+phase "VERIFY (2): replay channels (restore-mode sidecars), assert exactly one token live"
 echo "[*] starting restore-mode sidecars (RESTORE_SNAPSHOT_ID replays the recorded channel)"
 for x in $RESTORE_NODES; do
     breakout run_sidecar "{\"node\": \"$x\", \"snapshot_id\": \"$SID\"}"
