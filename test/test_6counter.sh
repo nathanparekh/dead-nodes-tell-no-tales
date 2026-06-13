@@ -42,18 +42,7 @@ TOTAL=$(( PER_NODE * N ))    # 60
 # confirmed finished -- so the test shows the system still processing operations
 # once the snapshot completes. It is stopped deterministically via a sentinel
 # file (the alpine control image has no pkill), with LOAD_MAX_SECS as a backstop.
-#
-# Rate matters: the mesh_proxy is single-threaded asyncio and print()s on EVERY
-# packet, so a firehose (many threads, no sleep) overruns the tunnel socket,
-# head-of-line-blocks a channel, and snowballs into an unclearable retransmit
-# storm (counters diverge, the total never reconciles). We don't need a firehose:
-# the marker sweep window is tens-to-hundreds of ms (it includes the CRIU
-# checkpoint), so a MODERATE concurrent rate keeps the channels non-empty during
-# the cut without melting the proxy. Defaults aim ~80 transfers/s total. Raise
-# LOAD_THREADS / lower LOAD_SLEEP only cautiously -- past a few hundred/s a
-# channel (historically .11) wedges.
-LOAD_THREADS="${LOAD_THREADS:-4}"       # concurrent in-flight transfer streams
-LOAD_SLEEP="${LOAD_SLEEP:-0.05}"        # per-thread pause between sends (rate throttle)
+LOAD_THREADS="${LOAD_THREADS:-8}"       # concurrent in-flight transfer streams
 PRE_SNAP_SECS="${PRE_SNAP_SECS:-3}"     # load-only seconds before the snapshot fires
 POST_SNAP_SECS="${POST_SNAP_SECS:-5}"   # KEEP operating this long AFTER the cut finishes
 SNAP_WAIT_SECS="${SNAP_WAIT_SECS:-30}"  # max seconds to wait for the cut to finish
@@ -105,10 +94,9 @@ verify_total() {
 start_load() {
     sudo podman exec mesh-ctl rm -f "$STOP_FILE" 2>/dev/null || true
     sudo podman exec -i mesh-ctl python3 - \
-        "$LOAD_MAX_SECS" "$LOAD_THREADS" "$LOAD_SLEEP" "$STOP_FILE" "${IPS[@]}" <<'PY' >/dev/null 2>&1 &
+        "$LOAD_MAX_SECS" "$LOAD_THREADS" "$STOP_FILE" "${IPS[@]}" <<'PY' >/dev/null 2>&1 &
 import socket, sys, threading, time, random, os
-cap = float(sys.argv[1]); nthreads = int(sys.argv[2]); pause = float(sys.argv[3])
-stop = sys.argv[4]; members = sys.argv[5:]
+cap = float(sys.argv[1]); nthreads = int(sys.argv[2]); stop = sys.argv[3]; members = sys.argv[4:]
 PORT = 5000
 deadline = time.time() + cap
 def worker():
@@ -121,7 +109,7 @@ def worker():
             s.sendto(f"TRANSFER tx123 {to} {PORT} 1".encode(), (frm, PORT))
         except OSError:
             pass
-        time.sleep(pause)
+        time.sleep(0.01)
 ts = [threading.Thread(target=worker) for _ in range(nthreads)]
 for t in ts: t.start()
 for t in ts: t.join()

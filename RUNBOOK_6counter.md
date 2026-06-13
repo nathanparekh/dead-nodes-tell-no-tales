@@ -77,10 +77,9 @@ The driver, all through the control container (`mesh-ctl`):
    `a→b→c→d→e→f→a` so every sidecar has learned every peer.
 2. Verifies the total settles at `60`.
 3. Starts a **multithreaded** load generator inside the control container —
-   `LOAD_THREADS` threads (default 4) firing ring transfers concurrently at a
-   moderate, sustainable rate (~80/s, throttled by `LOAD_SLEEP`), so node→node
-   CREDIT messages are genuinely **in transit on the channels** while the cut is
-   taken. Each transfer nets to zero, so the total stays `60`.
+   `LOAD_THREADS` threads (default 8) all firing ring transfers at once, so many
+   node→node CREDIT messages are genuinely **in transit on the channels** while
+   the cut is taken. Each transfer nets to zero, so the total stays `60`.
 4. Runs the load **continuously across three phases**: `PRE_SNAP_SECS` (default 3)
    before triggering the snapshot, through the marker sweep, and then — after
    **waiting for the cut to actually finish** (the initiator's artifact appearing
@@ -91,23 +90,16 @@ The driver, all through the control container (`mesh-ctl`):
 5. Re-verifies the total returns to `60`.
 
 Tune the load with env vars, e.g.
-`LOAD_THREADS=6 POST_SNAP_SECS=10 ./test/test_6counter.sh`.
+`LOAD_THREADS=16 POST_SNAP_SECS=10 ./test/test_6counter.sh`.
 
-> **Why multithreaded (but only moderate)?** A single, one-at-a-time transfer
-> loop leaves the channels empty almost always: RUDP delivers and ACKs each
-> CREDIT in well under a millisecond, so the marker sweep practically never lands
-> on a message in transit and the recorded channel state comes back empty.
-> Running transfers concurrently keeps the channels busy so the cut actually
-> captures in-flight state — watch a sidecar's log during the snapshot for
-> `Caching in-flight message seq N from <peer>`, which **is** recorded channel
-> state. But do **not** firehose it: the `mesh_proxy` is single-threaded asyncio
-> and `print()`s on every packet, so a few hundred transfers/s overruns the
-> tunnel socket, head-of-line-blocks a channel, and snowballs into an unclearable
-> `[retx] seq … to 10.24.24.11` storm (counters diverge, the total never settles
-> back to 60). The marker-sweep window is tens-to-hundreds of ms (it includes the
-> CRIU checkpoint), so the default ~80/s is plenty. If you see a runaway retx
-> storm or `total` stuck below 60, you are driving too hard — lower
-> `LOAD_THREADS` or raise `LOAD_SLEEP`.
+> **Why multithreaded?** A single, one-at-a-time transfer loop leaves the
+> channels empty almost always: RUDP delivers and ACKs each CREDIT in well under
+> a millisecond, so the marker sweep practically never lands on a message in
+> transit and the recorded channel state comes back empty. Running many transfers
+> concurrently keeps the channels busy so the cut actually captures in-flight
+> state. While the snapshot runs, watch a sidecar's log for lines like
+> `Caching in-flight message seq N from <peer>` — that **is** recorded channel
+> state, and it only appears because the channels are loaded.
 
 > The driver assumes it runs on physical node A (it initiates the snapshot
 > locally, `INIT_NODE=a`). Run it on the node whose letter is `a`.
