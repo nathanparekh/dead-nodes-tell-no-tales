@@ -156,4 +156,5 @@ for node in "${NODES[@]}"; do
     breakout run_sidecar "{\"node\": \"$node\", \"snapshot_id\": \"$SNAPSHOT_ID\"}"
 done
 
-echo "Restore complete. Verify with: sum of the node counters should equal 30."
+echo "Restore complete. The conserved total over the restored nodes (${NODES[*]}) should be"
+echo "unchanged from before the snapshot (3-node flow: mesh_ctl.sh sum; 6-node flow: ./test/verify_sum.sh)."
