@@ -145,19 +145,16 @@ report_inflight() { # report_inflight <id> -- informational, not a gate
     done
 }
 
-wait_mesh_ready() { # poll until every node answers -- sidecar TPROXY needs a
-                    # moment after deploy, so warming immediately can miss a node
-    local ip i ok
-    echo "[*] waiting for all nodes to answer (sidecar TPROXY ready)"
-    for i in $(seq 1 20); do
-        ok=1
-        for ip in "$A" "$B" "$C"; do
-            ./mesh_ctl.sh state "$ip" "$PORT" >/dev/null 2>&1 || ok=0
-        done
-        [ "$ok" = 1 ] && { echo "[*] all nodes reachable"; return 0; }
-        sleep 1
+bootstrap_retry() { # warm + verify total=30, retrying while the mesh settles --
+                    # sidecar TPROXY + the control plane take ~tens of seconds
+                    # after a fresh deploy. bootstrap is idempotent.
+    local i
+    for i in $(seq 1 12); do
+        ./mesh_ctl.sh bootstrap 10 && return 0
+        echo "[*] bootstrap attempt $i not verified yet (mesh settling); retry in 5s" >&2
+        sleep 5
     done
-    echo "WARN: not all nodes reachable after 20s; continuing anyway" >&2
+    return 1
 }
 
 verify_total() { # verify_total <id>
@@ -180,7 +177,7 @@ run_cut() { # run_cut <id> <checkpoint-netem> <restore-netem>
     local id="$1" ckpt_netem="$2" rst_netem="$3"
     ensure_up
     echo "[*] resetting baseline (total=$EXPECTED)"
-    ./mesh_ctl.sh bootstrap 10 || return 1
+    bootstrap_retry || return 1
 
     start_traffic
     sleep 1
@@ -232,9 +229,8 @@ cmd_up() {
     ./build.sh a A
     ./build.sh b B
     ./build.sh c C
-    wait_mesh_ready
     echo "[*] warming + verifying baseline (total=$EXPECTED)"
-    if ./mesh_ctl.sh bootstrap 10; then
+    if bootstrap_retry; then
         echo "[OK] mesh up; total == $EXPECTED verified; ready to snapshot"
     else
         echo "[FAIL] bootstrap did not verify total == $EXPECTED" >&2
@@ -244,9 +240,11 @@ cmd_up() {
 
 cmd_down() {
     echo "[*] tearing down single-host mesh"
-    sudo podman rm -f counter-a counter-b counter-c \
-        sidecar-a sidecar-b sidecar-c \
-        mesh-ctl sidecar-ctl breakout-anchor 2>/dev/null || true
+    # Remove dependents (sidecars share their parent's netns) BEFORE parents, or
+    # podman refuses to remove a parent with a live dependent and orphans it --
+    # an orphaned mesh-ctl then makes the next 'up' skip recreating sidecar-ctl.
+    sudo podman rm -f sidecar-a sidecar-b sidecar-c sidecar-ctl breakout-anchor \
+        counter-a counter-b counter-c mesh-ctl 2>/dev/null || true
     # Kill the receiver BEFORE removing the bridge: its IP_FREEBIND bind keeps
     # :8989 held otherwise, and the next 'up' can't health-check cleanly.
     sudo pkill -f 'breakout_receiver.py --host' 2>/dev/null || true
