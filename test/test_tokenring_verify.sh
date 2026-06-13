@@ -132,8 +132,12 @@ podman exec sidecar-a tc filter add dev eth0 protocol ip parent 1: prio 1 \
     || die "failed to add A->B netem filter on sidecar-a"
 
 echo "[*] waiting for the token to commit to the A->B wire (wait_inflight.py)"
-podman run --rm --network vlan -v "$ROOT/harness:/h:ro" --entrypoint python3 \
-    tokenring /h/wait_inflight.py "$A_IP" "$B_IP" "$PORT" 90 \
+# Run INSIDE the control container, not a bare `podman run`: only a sidecar'd
+# container can speak the mesh (its sidecar de-tunnels the RUDP STATUS replies).
+# A sidecar-less container's STATUS queries get no reply, so wait_inflight there
+# never sees the token and always times out. Pipe the script in over stdin.
+podman exec -i tokenring-ctl python3 - "$A_IP" "$B_IP" "$PORT" 90 \
+    < "$ROOT/harness/wait_inflight.py" \
     || die "wait_inflight timed out -- is the ring circulating? raise NETEM_MS"
 
 SID="vsnap$(date +%s)"
@@ -253,9 +257,10 @@ fi
 echo "[*] VERIFY (2) end-to-end restored ring: $V_E2E (expected PASS)"
 
 # Final app-level cross-check: the app's own verify must also pass (exactly one
-# holder seen, epochs contiguous and unique) on the restored ring.
+# holder seen, epochs contiguous and unique) on the restored ring. Run it through
+# the control container (it has a sidecar); a bare container can't read the mesh.
 phase "CROSS-CHECK: app's own verify on the restored ring"
-if podman run --rm --network vlan tokenring verify 30 \
+if podman exec tokenring-ctl ./tokenring.py verify 30 \
         "$A_IP" "$PORT" "$B_IP" "$PORT" "$C_IP" "$PORT"; then
     V_APP=PASS
 else
