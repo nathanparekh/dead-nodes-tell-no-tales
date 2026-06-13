@@ -243,8 +243,10 @@ cmd_down() {
     # Remove dependents (sidecars share their parent's netns) BEFORE parents, or
     # podman refuses to remove a parent with a live dependent and orphans it --
     # an orphaned mesh-ctl then makes the next 'up' skip recreating sidecar-ctl.
-    sudo podman rm -f sidecar-a sidecar-b sidecar-c sidecar-ctl breakout-anchor \
-        counter-a counter-b counter-c mesh-ctl 2>/dev/null || true
+    # Two separate rm calls, not one: removing a parent in the SAME command that
+    # is still tearing down its sidecar's shared netns races and can fail.
+    sudo podman rm -f sidecar-a sidecar-b sidecar-c sidecar-ctl breakout-anchor 2>/dev/null || true
+    sudo podman rm -f counter-a counter-b counter-c mesh-ctl 2>/dev/null || true
     # Kill the receiver BEFORE removing the bridge: its IP_FREEBIND bind keeps
     # :8989 held otherwise, and the next 'up' can't health-check cleanly.
     sudo pkill -f 'breakout_receiver.py --host' 2>/dev/null || true
