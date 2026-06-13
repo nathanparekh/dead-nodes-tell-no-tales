@@ -76,11 +76,26 @@ The driver, all through the control container (`mesh-ctl`):
 1. Resets all six counters to `10` (total `60`) and warms the ring
    `a→b→c→d→e→f→a` so every sidecar has learned every peer.
 2. Verifies the total settles at `60`.
-3. Starts a **continuous** `+1` ring of transfers (each lap nets to zero, so the
-   total stays `60`) and lets it flow for a few seconds — load BEFORE the cut.
-4. Triggers a global snapshot (`trigger_snapshot.sh a <snap_id>`) **mid-flight**.
-5. Keeps the load running a few seconds AFTER the cut, then stops it.
-6. Re-verifies the total returns to `60`.
+3. Starts a **multithreaded** load generator inside the control container —
+   `LOAD_THREADS` threads (default 8) all firing ring transfers at once, so many
+   node→node CREDIT messages are genuinely **in transit on the channels** while
+   the cut is taken. Each transfer nets to zero, so the total stays `60`. It runs
+   for `LOAD_SECS` (default 8) and self-terminates.
+4. After `PRE_SNAP_SECS` (default 3) of load, triggers a global snapshot
+   (`trigger_snapshot.sh a <snap_id>`) **mid-flight**; the load keeps running
+   across the marker sweep, then stops itself.
+5. Re-verifies the total returns to `60`.
+
+Tune the load with env vars, e.g. `LOAD_THREADS=16 LOAD_SECS=12 ./test/test_6counter.sh`.
+
+> **Why multithreaded?** A single, one-at-a-time transfer loop leaves the
+> channels empty almost always: RUDP delivers and ACKs each CREDIT in well under
+> a millisecond, so the marker sweep practically never lands on a message in
+> transit and the recorded channel state comes back empty. Running many transfers
+> concurrently keeps the channels busy so the cut actually captures in-flight
+> state. While the snapshot runs, watch a sidecar's log for lines like
+> `Caching in-flight message seq N from <peer>` — that **is** recorded channel
+> state, and it only appears because the channels are loaded.
 
 > The driver assumes it runs on physical node A (it initiates the snapshot
 > locally, `INIT_NODE=a`). Run it on the node whose letter is `a`.
@@ -91,8 +106,9 @@ Expected tail:
 PASS: total conserved at 60 across a global snapshot taken under live load.
 ```
 
-`counter.py`'s `sum` verb only spans 3 nodes, so the driver sums the six via
-`state` instead — it does not modify `counter.py`.
+The load generator sends `counter.py`'s exact `TRANSFER` wire format (fire and
+forget); `counter.py` itself is unmodified. Its `sum` verb only spans 3 nodes, so
+the driver sums the six via `state`.
 
 ## 3. Inspect the snapshot (PER NODE)
 

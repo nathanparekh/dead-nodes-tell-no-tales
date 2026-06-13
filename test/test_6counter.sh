@@ -32,6 +32,14 @@ IPS=(10.24.24.10 10.24.24.11 10.24.24.12 10.24.24.13 10.24.24.14 10.24.24.15)
 N=${#IPS[@]}
 TOTAL=$(( PER_NODE * N ))    # 60
 
+# Load generator knobs. The controller is MULTITHREADED so many transfers are in
+# flight at once -- otherwise node->node CREDITs are delivered+ACKed faster than
+# the marker sweep, the channels are ~always empty, and the snapshot records no
+# in-flight state (the whole point of a Chandy-Lamport cut). Tune via env.
+LOAD_THREADS="${LOAD_THREADS:-8}"     # concurrent in-flight transfer streams
+LOAD_SECS="${LOAD_SECS:-8}"           # total seconds of load (self-terminates)
+PRE_SNAP_SECS="${PRE_SNAP_SECS:-3}"   # load-only seconds before the snapshot fires
+
 # Run a counter.py verb inside the already-running control container.
 ctl() { sudo podman exec mesh-ctl ./counter.py "$@"; }
 
@@ -51,10 +59,11 @@ total6() {
     echo "$s"
 }
 
-# Poll the total until it settles at $1 (async credits need a moment to land).
+# Poll the total until it settles at $1 (a heavy concurrent load leaves many
+# credits in flight, so give them time to drain after the load stops).
 verify_total() {
     local want=$1 t
-    for _ in $(seq 1 20); do
+    for _ in $(seq 1 40); do
         t=$(total6)
         echo "    total=$t (want $want)"
         [ "$t" = "$want" ] && return 0
@@ -63,15 +72,37 @@ verify_total() {
     return 1
 }
 
-# Continuous +1 ring of transfers. Each full lap nets to zero, so the global
-# total is conserved; runs until killed.
-load_loop() {
-    while :; do
-        for ((i = 0; i < N; i++)); do
-            ctl transfer "${IPS[i]}" "$PORT" "${IPS[(i + 1) % N]}" "$PORT" 1 >/dev/null 2>&1
-            sleep 0.2
-        done
-    done
+# Start the load generator: a MULTITHREADED controller running INSIDE mesh-ctl.
+# Each thread fires counter.py's exact TRANSFER wire format around the ring as
+# fast as it can, so node->node CREDIT messages are genuinely traveling on the
+# channels while the snapshot marker sweep runs -- with the old one-at-a-time
+# loop the channels were ~always empty and the cut recorded nothing. Sends are
+# fire-and-forget (replies ignored); counter.py is unmodified. Every TRANSFER
+# debits one node and credits the next, so the global total stays conserved
+# regardless of where the run is cut off. The blaster exits after LOAD_SECS on
+# its own, so there is nothing to kill or reap on the happy path.
+start_load() {
+    sudo podman exec -i mesh-ctl python3 - "$LOAD_SECS" "$LOAD_THREADS" "${IPS[@]}" <<'PY' >/dev/null 2>&1 &
+import socket, sys, threading, time, random
+secs = float(sys.argv[1]); nthreads = int(sys.argv[2]); members = sys.argv[3:]
+PORT = 5000
+deadline = time.time() + secs
+def worker():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    n = len(members)
+    while time.time() < deadline:
+        i = random.randrange(n)
+        frm, to = members[i], members[(i + 1) % n]
+        try:
+            s.sendto(f"TRANSFER tx123 {to} {PORT} 1".encode(), (frm, PORT))
+        except OSError:
+            pass
+        time.sleep(0.01)
+ts = [threading.Thread(target=worker) for _ in range(nthreads)]
+for t in ts: t.start()
+for t in ts: t.join()
+PY
+    LOAD_PID=$!
 }
 
 # Flush the neighbor (ARP) cache of every sidecar netns we can reach on THIS
@@ -111,21 +142,26 @@ done
 echo "[*] Pre-load check: total should settle at $TOTAL"
 verify_total "$TOTAL" || { echo "FAIL: counters did not reach $TOTAL before load"; exit 1; }
 
-# 2. Start the continuous load and make sure it is killed on any exit.
-load_loop & LOOP_PID=$!
-trap 'kill "$LOOP_PID" 2>/dev/null' EXIT
-echo "[*] Continuous transfers running (pid $LOOP_PID); letting traffic flow BEFORE the snapshot..."
-sleep 3
+# 2. Start the multithreaded load. The EXIT trap only matters if we bail out
+#    early; on the happy path the blaster self-terminates after LOAD_SECS.
+start_load
+trap 'kill "$LOAD_PID" 2>/dev/null' EXIT
+echo "[*] Load generator running ($LOAD_THREADS threads, ${LOAD_SECS}s, pid $LOAD_PID);"
+echo "    letting traffic flow BEFORE the snapshot..."
+sleep "$PRE_SNAP_SECS"
 
-# 3. Snapshot mid-flight.
+# 3. Snapshot WHILE the load is saturating the channels.
 echo "[*] Triggering global snapshot '$SNAP_ID' from node $INIT_NODE while load continues..."
+echo "    (watch a sidecar's logs for 'Caching in-flight message seq ...' -- that IS"
+echo "     recorded channel state, and it only appears because the channels are busy.)"
 ./trigger_snapshot.sh "$INIT_NODE" "$SNAP_ID"
 
-# 4. Keep the load flowing after the cut, then stop it.
-echo "[*] Snapshot triggered; keeping load running AFTER the cut..."
-sleep 3
-kill "$LOOP_PID" 2>/dev/null; wait "$LOOP_PID" 2>/dev/null; trap - EXIT
-echo "[*] Stopped continuous load."
+# 4. Let the load run out the rest of LOAD_SECS (covering the marker sweep); it
+#    then stops itself. Wait for it, then let the in-flight credits drain.
+echo "[*] Snapshot triggered; load continues until it finishes..."
+wait "$LOAD_PID" 2>/dev/null; trap - EXIT
+echo "[*] Load generator finished; letting in-flight credits drain..."
+sleep 1
 
 # 5. Verify conservation once traffic has drained.
 echo "[*] Post-load check: total must return to $TOTAL"
