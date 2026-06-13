@@ -112,6 +112,7 @@ if [ "$PROXY" = true ]; then
       -e MESH_SUBNET="$MESH_SUBNET" \
       -e BREAKOUT_URL="$BREAKOUT_URL" \
       -e CHECKPOINT_TARGET="$APP_NAME" \
+      ${MESH_MEMBERS:+-e MESH_MEMBERS="$MESH_MEMBERS"} \
       sidecar
 fi
 

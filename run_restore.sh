@@ -26,6 +26,35 @@ if [ "${#NODES[@]}" -eq 0 ]; then
     NODES=(a b c)
 fi
 
+# Pre-flight: every requested node's CRIU image must exist on THIS host before we
+# touch anything. Restore is per-node and artifacts are LOCAL (no shared store),
+# so a wrong snapshot id or wrong node letters otherwise surfaces as an opaque
+# receiver 500 -- and only AFTER the old apps were already stopped. Catch it here
+# with a legible message instead, before any side effects.
+missing=()
+for node in "${NODES[@]}"; do
+    img="/tmp/snapshot-$SNAPSHOT_ID-counter-$node.tar.zst"
+    [ -f "$img" ] || missing+=("$img")
+done
+if [ "${#missing[@]}" -ne 0 ]; then
+    echo "ERROR: missing CRIU image(s) for snapshot '$SNAPSHOT_ID' on this host:" >&2
+    printf '       %s\n' "${missing[@]}" >&2
+    echo >&2
+    avail=$(ls /tmp/snapshot-*-counter-*.tar.zst 2>/dev/null \
+        | sed -E 's#.*/snapshot-(.*)-counter-([a-z])\.tar\.zst#\1 \2#' \
+        | sort \
+        | awk '{ids[$1]=ids[$1]" "$2} END{for (i in ids) printf "         %s ->%s\n", i, ids[i]}')
+    if [ -n "$avail" ]; then
+        echo "Available on this host (snapshot_id -> node letters):" >&2
+        echo "$avail" >&2
+        echo >&2
+        echo "Run on the node that holds the letters you pass, e.g. ./run_restore.sh <id> <those letters>." >&2
+    else
+        echo "No snapshot CRIU images found in /tmp on this host." >&2
+    fi
+    exit 1
+fi
+
 breakout() { # usage: breakout <endpoint> <json-body>
     # --max-time bounds each call: a restore may take up to the receiver's
     # 120s command timeout, so allow a little more. A dropped/firewalled
@@ -127,4 +156,5 @@ for node in "${NODES[@]}"; do
     breakout run_sidecar "{\"node\": \"$node\", \"snapshot_id\": \"$SNAPSHOT_ID\"}"
 done
 
-echo "Restore complete. Verify with: sum of the node counters should equal 30."
+echo "Restore complete. The conserved total over the restored nodes (${NODES[*]}) should be"
+echo "unchanged from before the snapshot (3-node flow: mesh_ctl.sh sum; 6-node flow: ./test/verify_sum.sh)."
