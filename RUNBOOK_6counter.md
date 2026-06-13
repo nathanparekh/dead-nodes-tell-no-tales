@@ -120,8 +120,17 @@ node's own counters with their letters:
 ./run_restore.sh <snap_id> d e f
 ```
 
-Then re-verify conservation by re-running step 2's checks (or just
-`./test/test_6counter.sh` again, which re-bootstraps).
+Then confirm the total was conserved across snapshot + restore:
+
+```bash
+# from any one node:
+./test/verify_sum.sh            # opens a control container, checks the 6 sum to 60
+```
+
+`verify_sum.sh` reads the live post-restore values without resetting, so it
+actually verifies the restore. (Do NOT re-run `test_6counter.sh` to check a
+restore — it resets every counter to 10 first, which would mask whether the
+restored values were correct.)
 
 ## Gotchas
 

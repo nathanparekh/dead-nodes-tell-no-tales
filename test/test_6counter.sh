@@ -140,4 +140,6 @@ echo
 echo "Snapshot '$SNAP_ID' artifacts are PER NODE (on each node's local /tmp):"
 echo "    /tmp/snapshot-$SNAP_ID-counter-<suffix>.json     (channel-state cut)"
 echo "    /tmp/snapshot-$SNAP_ID-counter-<suffix>.tar.zst  (app CRIU image)"
-echo "To exercise recovery, run ./run_restore.sh $SNAP_ID <suffix> on each node."
+echo "To exercise recovery: run ./run_restore.sh $SNAP_ID <this node's letters> on"
+echo "each node (A: a b c, B: d e f), then ./test/verify_sum.sh to confirm the"
+echo "restored counters still sum to $TOTAL."
